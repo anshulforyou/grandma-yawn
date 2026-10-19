@@ -431,6 +431,32 @@ function core.wavPeak(data)
   return peak / 32768
 end
 
+-- Seconds of audio in a 16 kHz mono 16-bit WAV of `bytes` bytes (44 of them header), or 0.
+function core.wavSeconds(bytes)
+  return math.max(0, ((bytes or 0) - 44) / 32000)
+end
+
+-- Under this much audio there is nothing to transcribe: the mic recorded nothing (it was taken
+-- away, or the recorder died as it started). Uploading that once came back as a puzzling "bad
+-- response" from Deepgram instead of saying what happened.
+core.MIN_AUDIO_SECONDS = 0.1
+
+-- Seconds to wait before starting a new standby recorder after `failures` standbys in a row
+-- ended on their own: at once the first time, then backing off to a minute, so a recorder that
+-- keeps dying can't restart every few seconds.
+function core.standbyDelay(failures)
+  if (failures or 0) <= 1 then return 0 end
+  return math.min(60, 2 ^ (failures - 1))
+end
+
+-- How a recorder process ended, for the log: nil for a normal end, else words. hs.task reports a
+-- process killed by a signal with the signal's number.
+function core.recorderExit(code)
+  if code == nil or code == 0 or code == 15 then return nil end -- 15: we stopped it (SIGTERM)
+  local names = { [6] = "crashed (SIGABRT)", [9] = "was killed (SIGKILL)", [11] = "crashed (SIGSEGV)" }
+  return names[code] or ("exited with code " .. tostring(code))
+end
+
 -- Explains a "No speech detected" result when the microphone looks like the cause.
 -- `peak` is 0..1 (or nil), `volume` the input volume in percent (or nil).
 function core.noSpeechHint(deviceName, volume, peak)

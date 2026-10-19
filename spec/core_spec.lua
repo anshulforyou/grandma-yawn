@@ -1471,3 +1471,30 @@ describe("working on a page", function()
     assert.are.equal("upload_file", work.tools[2].name)
   end)
 end)
+
+describe("when the recorder or its mic fails", function()
+  it("measures the audio in a recording, the header aside", function()
+    assert.are.equal(0, core.wavSeconds(44))
+    assert.are.equal(0, core.wavSeconds(0))
+    assert.are.equal(0, core.wavSeconds(nil))
+    assert.are.equal(1, core.wavSeconds(44 + 32000))
+    -- the 2026-10-20 dictation: a header and nothing else, which went to Deepgram anyway
+    assert.is_true(core.wavSeconds(44) < core.MIN_AUDIO_SECONDS)
+    assert.is_true(core.wavSeconds(44 + 32000 * 0.3) >= core.MIN_AUDIO_SECONDS)
+  end)
+
+  it("restarts a standby at once the first time, then backs off to a minute", function()
+    local waits = {}
+    for failures = 0, 9 do table.insert(waits, core.standbyDelay(failures)) end
+    assert.are.same({ 0, 0, 2, 4, 8, 16, 32, 60, 60, 60 }, waits)
+    assert.are.equal(0, core.standbyDelay(nil))
+  end)
+
+  it("names a crash, and stays quiet about normal ends", function()
+    assert.is_nil(core.recorderExit(0))
+    assert.is_nil(core.recorderExit(15))
+    assert.is_nil(core.recorderExit(nil))
+    assert.are.equal("crashed (SIGABRT)", core.recorderExit(6))
+    assert.are.equal("exited with code 2", core.recorderExit(2))
+  end)
+end)
