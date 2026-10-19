@@ -6,6 +6,7 @@
 -- everything becomes a proposal for `grandma review`. Plain dictation is never used for facts.
 
 local core = require("deepgram_dictation.core")
+local overlay = require("deepgram_dictation.screen_overlay")
 
 local M = {}
 
@@ -142,8 +143,8 @@ function M.tick()
       if result and result.path then
         log("style proposal: %s", result.path)
         -- global isn't a sweater, so `grandma review global` doesn't list it: plain review does.
-        hs.notify.new({ title = "Grandma learned how you write",
-                        informativeText = "A proposed change to your style notes. Run: grandma review" }):send()
+        overlay.showCard({ note = "Noted", text = { gist = "I learned how you write",
+          body = "A proposed change to your style notes. Run: grandma review" } })
       end
     end)
   end
@@ -154,7 +155,7 @@ function M.tick()
       log("%d proposal(s) for grandma review from %s", #result.proposals, table.concat(result.days, ", "))
       local text = string.format("%d memory proposal(s) from what you said to her. Run: grandma review",
         #result.proposals)
-      hs.notify.new({ title = "Grandma learned something", informativeText = text }):send()
+      overlay.showCard({ text = { gist = "I learned something", body = text }, note = "Noted" })
     end
     style()
   end)

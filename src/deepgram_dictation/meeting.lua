@@ -8,6 +8,7 @@
 local core = require("deepgram_dictation.core")
 local sounds = require("deepgram_dictation.sounds")
 local indicator = require("deepgram_dictation.meeting_indicator")
+local overlay = require("deepgram_dictation.screen_overlay")
 
 local M = {}
 
@@ -56,10 +57,11 @@ local function stopTimers()
   if tickTimer then tickTimer:stop() tickTimer = nil end
 end
 
+-- Grandma's card in the top right (never a macOS notification). With `path`, opening it opens the file.
 local function notify(title, text, path)
-  hs.notify.new(path and function() hs.execute("/usr/bin/open " .. string.format("%q", path)) end or nil, {
-    title = title, informativeText = text, withdrawAfter = 10,
-  }):send()
+  overlay.showCard({ text = { gist = title, body = text }, note = "Meeting",
+    footer = path and "Click to open it" or nil,
+    onOpen = path and function() hs.execute("/usr/bin/open " .. string.format("%q", path)) end or nil })
 end
 
 local function setState(new)

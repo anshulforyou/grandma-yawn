@@ -726,6 +726,54 @@ describe("screen questions", function()
     end)
   end)
 
+  describe("a conversation with grandma", function()
+    it("sends what came before ahead of the screenshot, after memory", function()
+      local earlier = { { question = "which flight?", answer = "AI 505 at 18:10" } }
+      local content = core.screenRequest(cfg, "S", "and the gate?", "IMG", "image/jpeg",
+        { memory = { { name = "acme", kind = "sweater", text = "F" } } }, earlier).messages[1].content
+      assert.truthy(content[1].text:find("<memory", 1, true))
+      assert.truthy(content[2].text:find("<they_said>which flight?</they_said>", 1, true))
+      assert.truthy(content[2].text:find("<you_said>AI 505 at 18:10</you_said>", 1, true))
+      assert.are.equal("image", content[3].type)
+      assert.are.equal("<question>and the gate?</question>", content[4].text)
+    end)
+
+    it("sends nothing extra for a first question", function()
+      local content = core.screenRequest(cfg, "S", "q", "IMG", "image/jpeg", nil, {}).messages[1].content
+      assert.are.equal("image", content[1].type)
+    end)
+
+    it("keeps the newest turns, unmarked and trimmed", function()
+      local thread = { turns = {} }
+      for i = 1, core.THREAD_TURNS + 2 do core.threadAdd(thread, "q" .. i, "**a" .. i .. "**", 100 + i) end
+      assert.are.equal(core.THREAD_TURNS, #thread.turns)
+      assert.are.equal("q3", thread.turns[1].question)
+      assert.are.equal("a3", thread.turns[1].answer)
+      core.threadAdd(thread, "long", string.rep("x", core.THREAD_ANSWER_CHARS + 50), 200)
+      assert.are.equal(core.THREAD_ANSWER_CHARS + 3, #thread.turns[#thread.turns].answer)
+    end)
+
+    it("marks what she said on her own", function()
+      local thread = { turns = {} }
+      core.threadAdd(thread, nil, "Task done: ₹600 a day", 1)
+      assert.truthy(thread.turns[1].question:find("on her own", 1, true))
+    end)
+
+    it("is followed on while her card is open or within five minutes, then starts fresh", function()
+      local thread = { turns = {} }
+      assert.are.same({}, core.threadTurns(thread, 0, true))
+      core.threadAdd(thread, "q", "a", 1000)
+      assert.are.equal(1, #core.threadTurns(thread, 1000 + core.THREAD_SECONDS, false))
+      assert.are.same({}, core.threadTurns(thread, 1001 + core.THREAD_SECONDS, false))
+      assert.are.equal(1, #core.threadTurns(thread, 99999, true))
+    end)
+
+    it("puts her own cards in the top right", function()
+      local frame = { x = 0, y = 25, w = 1440, h = 875 }
+      assert.are.same({ x = 1440 - 440 - 16, y = 25 + 16 }, core.cornerOrigin(440, 200, frame))
+    end)
+  end)
+
   describe("memoryRequests and continueWithResults", function()
     local resp = { stop_reason = "tool_use", content = {
       { type = "thinking", thinking = "", signature = "SIG" },

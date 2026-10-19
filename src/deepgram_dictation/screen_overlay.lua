@@ -171,38 +171,35 @@ function M.closePanel(fade)
   if cancel then cancel("replaced") end
 end
 
--- Shows `text` next to the mouse, on whichever display it is on now. `text` may be { gist, body }:
--- the gist is one bold line on top. Words marked "**like this**" stand out from the rest. `note` is the small line in
--- the header ("Copied"). Closes on a click on the panel, on Esc, or when the next dictation starts.
--- With `keys` ({ onReturn, onEscape }) it asks: Return and Esc are answered here and never reach
--- the app underneath (so Return can't submit a form), and a click counts as Esc. `pictures`
--- ({ { path, caption } }) are shown under the text, so a file is seen before it is uploaded.
-local THUMB, CAPTION = 84, 18
-function M.showPanel(text, note, isError, keys, pictures)
+-- Panel text: `text` may be { gist, body }. Returns gist (or nil), body.
+local function split(text)
+  if type(text) ~= "table" then return nil, text end
+  local gist = text.gist and core.unmark(text.gist):match("^%s*(.-)%s*$")
+  return gist ~= "" and gist or nil, text.body
+end
+
+-- Draws a panel's elements on a new canvas sized to fit, placed later. `footer` is a muted line
+-- at the bottom; clicking it is reported with the id "footer". `maxShare` is how much of the
+-- screen's height it may take.
+local THUMB, CAPTION, FOOTER = 84, 18, 26
+local function build(text, note, isError, pictures, footer, frame, maxShare)
   pictures = pictures or {}
-  M.closePanel()
-  local gist
-  if type(text) == "table" then
-    gist = text.gist and core.unmark(text.gist):match("^%s*(.-)%s*$")
-    text = text.body
-    if gist == "" then gist = nil end
-  end
-  local runs = core.highlightRuns(text)
-  local frame = (hs.mouse.getCurrentScreen() or hs.screen.mainScreen()):frame()
+  local gist, bodySource = split(text)
+  local runs = core.highlightRuns(bodySource or "")
   local body = bodyText(runs, isError)
   local c = hs.canvas.new({ x = 0, y = 0, w = W, h = 100 })
   local gistH = gist and textHeight(c, { { text = gist } }, W - 2 * PAD, GIST_SIZE, true) or 0
   local top = PAD + HEADER + 10 + (gist and gistH + GIST_GAP or 0)
-  local maxBody = math.floor(frame.h * 0.7) - top - PAD
-  local bodyH = math.min(textHeight(c, runs, W - 2 * PAD, BODY_SIZE), maxBody)
+  local footH = footer and FOOTER or 0
+  local maxBody = math.floor(frame.h * (maxShare or 0.7)) - top - PAD - footH
+  local bodyH = (bodySource or "") ~= "" and math.min(textHeight(c, runs, W - 2 * PAD, BODY_SIZE), maxBody) or 0
   local shelf = #pictures > 0 and (12 + THUMB + CAPTION) or 0
-  local h = top + bodyH + shelf + PAD
+  local h = top + bodyH + shelf + footH + PAD
   c:size({ w = W, h = h })
-  c:topLeft(core.panelOrigin(hs.mouse.absolutePosition(), W, h, frame))
   c:appendElements({
     { id = "bg", type = "rectangle", action = "strokeAndFill", roundedRectRadii = { xRadius = 14, yRadius = 14 },
       fillColor = rgb(PANEL_BG), strokeColor = rgb(M.ROSE, 0.55), strokeWidth = 1,
-      frame = { x = 0.5, y = 0.5, w = W - 1, h = h - 1 }, trackMouseUp = true },
+      frame = { x = 0.5, y = 0.5, w = W - 1, h = h - 1 }, trackMouseUp = true, trackMouseEnterExit = true },
     { type = "circle", action = "fill", fillColor = rgb(M.ROSE), radius = 5,
       center = { x = PAD + 5, y = PAD + HEADER / 2 } },
     { type = "text", text = styled("grandma", 13, M.ROSE_LIGHT, "bold"),
@@ -227,8 +224,34 @@ function M.showPanel(text, note, isError, keys, pictures)
     c:appendElements({ type = "text", text = styled(pic.caption or "", 11, PANEL_MUTED),
                        frame = { x = x, y = y + THUMB + 2, w = slot - 10, h = CAPTION } })
   end
+  if footer then
+    c:appendElements({ id = "footer", type = "text", text = styled(footer, 12, M.ROSE_LIGHT, nil, nil, 0.8),
+                       frame = { x = PAD, y = h - PAD - FOOTER + 8, w = W - 2 * PAD, h = FOOTER - 6 },
+                       trackMouseUp = true })
+  end
   c:level(hs.canvas.windowLevels.floating)
-  c:behavior({ "canJoinAllSpaces" })
+  c:behavior({ "canJoinAllSpaces", "fullScreenAuxiliary" })
+  return c, h
+end
+
+local typeHandler -- function(ctx): set by init, runs what the user typed under a panel
+
+-- Shows `text` next to the mouse, on whichever display it is on now. `text` may be { gist, body }:
+-- the gist is one bold line on top. Words marked "**like this**" stand out from the rest. `note` is the small line in
+-- the header ("Copied"). Closes on a click on the panel, on Esc, or when the next dictation starts.
+-- With `keys` ({ onReturn, onEscape }) it asks: Return and Esc are answered here and never reach
+-- the app underneath (so Return can't submit a form), and a click counts as Esc. `pictures`
+-- ({ { path, caption } }) are shown under the text, so a file is seen before it is uploaded.
+-- `opts`: corner = true puts it in the top right (her own messages), typeable = a context table
+-- ({ replyTo = task id }) adds "click here to type" for an answer typed instead of said.
+function M.showPanel(text, note, isError, keys, pictures, opts)
+  opts = opts or {}
+  M.closePanel()
+  local frame = (hs.mouse.getCurrentScreen() or hs.screen.mainScreen()):frame()
+  local footer = opts.typeable and "Hold Fn+Control to reply, or click here to type" or nil
+  local c, h = build(text, note, isError, pictures, footer, frame)
+  c:topLeft(opts.corner and core.cornerOrigin(W, h, frame)
+    or core.panelOrigin(hs.mouse.absolutePosition(), W, h, frame))
   pendingCancel = keys and keys.onEscape
   -- `how` (return, esc, click; "replaced" when a new press closed it) goes to the callback and
   -- the console, so a card nobody answered can be told apart from one the user cancelled.
@@ -238,8 +261,15 @@ function M.showPanel(text, note, isError, keys, pictures)
     if keys then log("card closed: %s", how) end
     if fn then fn(how) end
   end
-  c:mouseCallback(function(_, message)
-    if message == "mouseUp" then answer(keys and keys.onEscape, "click") end
+  c:mouseCallback(function(_, message, id)
+    if message ~= "mouseUp" then return end
+    if id == "footer" and opts.typeable and typeHandler then
+      local at = c:frame()
+      local ctx = opts.typeable
+      answer(keys and keys.onEscape, "type")
+      return typeHandler(ctx, { x = at.x, y = at.y, w = W })
+    end
+    answer(keys and keys.onEscape, "click")
   end)
   c:show(0.15)
   panel = c
@@ -257,9 +287,255 @@ function M.showPanel(text, note, isError, keys, pictures)
   end):start()
 end
 
+function M.panelOpen() return panel ~= nil end
+
+function M.setTypeHandler(fn) typeHandler = fn end
+
+-- Her own messages ---------------------------------------------------------------------------
+-- When she has something to say on her own (a task finished, a meeting was filed), a card shows
+-- in the top right for core.CARD_SECONDS (longer while the mouse is on it), then shrinks into her
+-- round bubble in the corner, which stays until it is clicked. A click on either opens it.
+-- Nothing here takes keys, so typing anywhere carries on as usual.
+
+local BUBBLE = 64
+local SHRINK = 0.45 -- seconds
+local card, cardItem, cardTimer, cardAnim, bubble, spacesWatcher, spokeListener
+local pending = {} -- items waiting in the bubble, newest last
+
+local function mascot()
+  M._mascot = M._mascot or hs.image.imageFromPath(hs.configdir .. "/deepgram_dictation/badges/grandma.gif")
+  return M._mascot
+end
+
+local function cornerFrame()
+  return (hs.screen.mainScreen() or hs.screen.primaryScreen()):frame()
+end
+
+local function hideBubble()
+  if bubble then bubble:delete() bubble = nil end
+end
+
+local function openItem(item)
+  if item.onOpen then return item.onOpen() end
+  M.showPanel(item.text, item.note, item.isError, nil, nil, { corner = true, typeable = {} })
+end
+
+-- The bubble, made fresh each time (a window kept from earlier never shows over a full-screen
+-- app it wasn't made on, see badge.lua). `grow` animates it in from nothing.
+local function showBubble(grow)
+  hideBubble()
+  if #pending == 0 then return end
+  local f = cornerFrame()
+  local pad = 6
+  local size = BUBBLE + 2 * pad
+  local b = hs.canvas.new({ x = f.x + f.w - size - 12, y = f.y + 12, w = size, h = size })
+  local elements = {
+    { type = "circle", action = "strokeAndFill", fillColor = rgb(PANEL_BG), strokeColor = rgb(M.ROSE), strokeWidth = 2,
+      center = { x = size / 2, y = size / 2 }, radius = BUBBLE / 2, trackMouseUp = true },
+    { type = "image", image = mascot(), imageAnimates = true, imageScaling = "scaleProportionally",
+      frame = { x = pad + 8, y = pad + 8, w = BUBBLE - 16, h = BUBBLE - 16 } },
+  }
+  if #pending > 1 then
+    table.insert(elements, { type = "circle", action = "fill", fillColor = rgb(M.ROSE_DEEP),
+      center = { x = size - 14, y = 14 }, radius = 10 })
+    table.insert(elements, { type = "text", text = styled(tostring(#pending), 11, "ffffff", "bold", "center"),
+      frame = { x = size - 24, y = 6, w = 20, h = 16 } })
+  end
+  b:appendElements(elements)
+  b:level(hs.canvas.windowLevels.floating)
+  b:behavior({ "canJoinAllSpaces", "stationary", "fullScreenAuxiliary" })
+  b:clickActivating(false)
+  b:mouseCallback(function(_, message)
+    if message ~= "mouseUp" then return end
+    local item = table.remove(pending)
+    showBubble(false)
+    if item then openItem(item) end
+  end)
+  b:show(grow and 0.2 or 0)
+  bubble = b
+end
+
+local function stopCard()
+  if cardTimer then cardTimer:stop() cardTimer = nil end
+  if cardAnim then cardAnim:stop() cardAnim = nil end
+  if card then card:delete() card = nil end
+  local item = cardItem
+  cardItem = nil
+  if item and item.onHide then item.onHide() end
+end
+
+-- The card shrinks into the corner, and the bubble takes it in.
+local function shrinkCard()
+  if cardTimer then cardTimer:stop() cardTimer = nil end
+  if not card then return end
+  local item, c = cardItem, card
+  local from = c:frame()
+  local f = cornerFrame()
+  local to = { x = f.x + f.w - BUBBLE - 18, y = f.y + 18, w = BUBBLE, h = BUBBLE }
+  local started = hs.timer.secondsSinceEpoch()
+  cardAnim = hs.timer.doEvery(1 / 60, function()
+    local p = math.min(1, (hs.timer.secondsSinceEpoch() - started) / SHRINK)
+    local e = 1 - (1 - p) ^ 3
+    if card then
+      card:frame({ x = from.x + (to.x - from.x) * e, y = from.y + (to.y - from.y) * e,
+                   w = from.w + (to.w - from.w) * e, h = from.h + (to.h - from.h) * e })
+      card:alpha(1 - e)
+    end
+    if p >= 1 then
+      table.insert(pending, item)
+      stopCard()
+      showBubble(true)
+    end
+  end)
+end
+
+-- Shows `item` as a card: { text = { gist, body } or string, note, isError, onOpen, onShow,
+-- onHide }. onShow runs as it appears and onHide when it goes (opened, shrunk or replaced), so a
+-- task can take Fn+Control replies only while its card is up. Without onOpen, opening it shows
+-- the whole text in a panel in the corner.
+function M.showCard(item)
+  if card then
+    -- One card at a time: the one showing goes into the bubble first.
+    table.insert(pending, cardItem)
+    stopCard()
+    showBubble(false)
+  end
+  local f = cornerFrame()
+  local c, h = build(item.text, item.note, item.isError, nil, item.footer or "Click to open", f, 0.35)
+  c:topLeft(core.cornerOrigin(W, h, f))
+  c:clickActivating(false)
+  local hovering = false
+  c:mouseCallback(function(_, message)
+    if message == "mouseEnter" then hovering = true
+    elseif message == "mouseExit" then hovering = false
+    elseif message == "mouseUp" then
+      stopCard()
+      openItem(item)
+    end
+  end)
+  c:show(0.25)
+  card, cardItem = c, item
+  if spokeListener then spokeListener(item) end
+  if item.onShow then item.onShow() end
+  local left = core.CARD_SECONDS
+  cardTimer = hs.timer.doEvery(1, function()
+    if not hovering then left = left - 1 end
+    if left <= 0 then shrinkCard() end
+  end)
+end
+
+function M.cardOpen() return card ~= nil end
+
+-- Opens the newest message waiting in her bubble, as a click on it would. False if none.
+function M.openBubble()
+  local item = table.remove(pending)
+  if not item then return false end
+  showBubble(false)
+  openItem(item)
+  return true
+end
+
+-- The card goes without a trace (the user is answering it now).
+function M.dismissCard() stopCard() end
+
+-- Called with each item as it shows, so init can carry it into the conversation.
+function M.onSpoke(fn) spokeListener = fn end
+
+-- Card and bubble out of a screenshot: `hidden` true hides them, false brings them back.
+function M.hideForCapture(hidden)
+  for _, c in ipairs({ card, bubble }) do
+    if c then c:alpha(hidden and 0 or 1) end
+  end
+end
+
+-- Typing instead of talking ----------------------------------------------------------------------
+
+local box, boxWatch, boxPrev, boxDone, boxFocus -- luacheck: ignore 231
+
+local function closeBox()
+  if boxWatch then boxWatch:stop() boxWatch = nil end
+  if box then box:delete() box = nil end
+end
+
+local BOX_HTML = [[<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;background:#1d1a1c;overflow:hidden}
+input{width:100%;height:44px;box-sizing:border-box;border:2px solid #fa98a3;border-radius:0;background:#1d1a1c;
+color:#f4eef0;padding:0 14px;font:14px -apple-system,system-ui;outline:none}
+input::placeholder{color:#a8999e}
+</style></head><body><input id="t" placeholder="Type to grandma. Return sends, Esc cancels" autofocus>
+<script>
+const t=document.getElementById('t');t.focus();
+t.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();webkit.messageHandlers.grandma.postMessage({text:t.value});}
+  else if(e.key==='Escape'){webkit.messageHandlers.grandma.postMessage({cancel:true});}
+});
+</script></body></html>]]
+
+-- A one-line box at `at` ({ x, y, w }); `done(text)` gets what was typed (nil if cancelled or
+-- the user clicked away), after focus is back on the window they were in.
+function M.typeBox(at, done)
+  closeBox()
+  boxPrev = hs.window.focusedWindow()
+  local finished = false
+  local function finish(text)
+    if finished then return end
+    finished = true
+    closeBox()
+    if boxPrev then boxPrev:focus() end
+    boxDone = hs.timer.doAfter(0.25, function() boxDone = nil done(text) end)
+  end
+  local uc = hs.webview.usercontent.new("grandma")
+  uc:setCallback(function(msg)
+    local body = type(msg) == "table" and msg.body or {}
+    if body.cancel then return finish(nil) end
+    local text = type(body.text) == "string" and body.text:match("^%s*(.-)%s*$") or ""
+    finish(text ~= "" and text or nil)
+  end)
+  local frame = (hs.mouse.getCurrentScreen() or hs.screen.mainScreen()):frame()
+  local y = math.min(at.y, frame.y + frame.h - 60)
+  box = hs.webview.new({ x = at.x, y = y, w = at.w, h = 44 }, { developerExtrasEnabled = false }, uc)
+  box:windowStyle({ "borderless" })
+  box:allowTextEntry(true)
+  box:level(hs.canvas.windowLevels.floating)
+  box:behavior(hs.drawing.windowBehaviors.canJoinAllSpaces + hs.drawing.windowBehaviors.fullScreenAuxiliary)
+  box:html(BOX_HTML)
+  box:show()
+  box:bringToFront(true)
+  local win = box:hswindow()
+  if win then win:focus() end
+  -- The page's autofocus doesn't hold once the window takes focus: put the cursor in it again.
+  local b = box
+  b:navigationCallback(function(action)
+    if action == "didFinishNavigation" then b:evaluateJavaScript("document.getElementById('t').focus()") end
+  end)
+  boxFocus = hs.timer.doAfter(0.3, function()
+    boxFocus = nil
+    if box == b then b:evaluateJavaScript("document.getElementById('t').focus()") end
+  end)
+  -- Clicking into another app cancels it. (The focused window alone reads nil at moments while
+  -- typing, so it is the frontmost app that counts.)
+  local seen = false
+  boxWatch = hs.timer.doEvery(0.4, function()
+    local front = hs.application.frontmostApplication()
+    local ours = front and front:bundleID() == hs.processInfo.bundleID
+    if ours then seen = true elseif seen then finish(nil) end
+  end)
+end
+
+function M.setup()
+  if spacesWatcher then return end
+  -- The bubble is long-lived: remake it on each Space change so it shows over full-screen apps.
+  spacesWatcher = hs.spaces.watcher.new(function() if bubble then showBubble(false) end end):start()
+end
+
 function M.teardown()
   M.hideGlow(0)
   M.closePanel()
+  stopCard()
+  hideBubble()
+  closeBox()
+  pending = {}
+  if spacesWatcher then spacesWatcher:stop() spacesWatcher = nil end
 end
 
 return M

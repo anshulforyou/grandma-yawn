@@ -284,7 +284,9 @@ Plain dictation (Fn alone) is never read for facts: it's you writing to other pe
 
 Some editors draw their interface on a canvas that Accessibility can't see into. There a button's name can't be checked, so only her instructions keep her off Publish, and the Hammerspoon console logs each such click. When a change depends on a company or project and it isn't clear which, she asks which sweater or project you mean instead of guessing. `make test-work` runs it on a test landing page in Brave (it takes over the mouse and keyboard for a minute or two).
 
-**Grandma takes on tasks in the background.** Ask for work that needs more than the screen, such as "review this PR", "find out why this test fails", or "look into this company before my call". Grandma starts a [Claude Code](https://claude.com/claude-code) background session (`claude --bg`, through your Claude Code login) and you carry on working. When she's done, or needs something only you can answer, you get a notification and a sound. Click it to see what she said. While that panel is open, hold Fn+Control to reply, and she carries on in the same session. Return opens the session in Terminal (`claude attach`). The 🎙 menu lists recent tasks, with Stop.
+**Grandma shows things on screen, and you talk back.** She never uses macOS notifications. When she has something to tell you on her own (a task finished, a meeting filed), her card shows in the top right for about 15 seconds, longer while the mouse is on it. Then it shrinks into her round bubble in the corner, which stays until you click it. Her answers carry a conversation. Hold Fn+Control while one is open, or within 5 minutes of it, and your follow-up ("and for two days?", "make it shorter") is asked with what was said before and a fresh look at the screen. If you'd rather type, click "click here to type" under an answer, type, and press Return. It is handled exactly as if you had said it.
+
+**Grandma takes on tasks in the background.** Ask for work that needs more than the screen, such as "review this PR", "find out why this test fails", or "look into this company before my call". Grandma starts a [Claude Code](https://claude.com/claude-code) background session (`claude --bg`, through your Claude Code login) and you carry on working. When she's done, or needs something only you can answer, her card appears in the top right with a soft sound. While it shows, hold Fn+Control to reply, and she carries on in the same session. Click it to read everything she said. Return opens the session in Terminal (`claude attach`). The 🎙 menu lists recent tasks, with Stop.
 
 - **Her memory.** The session runs in the folder of the project the task belongs to, when your grandma catalog points at one, otherwise in a folder under `taskWorkspace`. It gets your `global/` memory, the catalog, and the sweater or project the task was matched to. It can read the rest of your grandma home and your project folders when the task needs more, and asks which sweater or project you mean when it can't tell. Memory is never written by a task. `secrets/`, `.env` files and anything named like a key or credential are denied to every read.
 - **What she can do.** It runs in Claude Code's restricted mode, with an allowlist. She can read and search files, use git and gh to look (diffs, logs, PRs, issues, checks), and search and read the web. Pushing, `git remote`, opening, commenting on, reviewing or merging PRs and issues, `gh api`, curl and ssh are denied. You do every outward action yourself, and she ends with what to run or post when the task needs one.
@@ -329,7 +331,7 @@ paused. The menu bar also shows 🔴 and the elapsed time. When you stop:
 2. the tracks are merged into one timeline. In online meetings your mic is labelled **Me** and
    remote people **Speaker 1**, **Speaker 2**, …,
 3. the transcript is **copied to your clipboard** and saved as Markdown in
-   `~/Documents/Meeting Transcripts/`. A notification tells you when it's ready (click it to
+   `~/Documents/Meeting Transcripts/`. Grandma's card tells you when it's ready (click it to
    open the file).
 
 Paste into Notion and the headings and speaker names keep their formatting.
@@ -395,7 +397,7 @@ Claude** in the 🎙 menu, or run
 
 Create, rename or merge folders yourself whenever you like. Claude uses the folder names and
 their recent meeting titles to decide where new meetings go. If Claude isn't available, the
-transcript is still saved (unfiled) and copied, and the notification says why it wasn't filed.
+transcript is still saved (unfiled) and copied, and grandma's card says why it wasn't filed.
 
 ### Filing into grandma
 
@@ -565,7 +567,7 @@ Open the Hammerspoon console (menu bar icon → Console). Lines from this tool s
 | "DeepgramRecorder.app not found" | Install the Xcode Command Line Tools, then re-run `./install.sh` |
 | Can't see the 🎙 icon | It's hidden by the notch or a full menu bar. Use **⌃⌥⌘D**, hide other icons, or ⌘-drag 🎙 further right. Also check System Settings → Menu Bar allows Hammerspoon |
 | No prompt when a Google Meet call starts | Allow Hammerspoon to control your browser (System Settings → Privacy & Security → Automation) |
-| Transcript "Not filed" | Make sure `claude` works in Terminal and you're logged in. The reason is in the notification |
+| Transcript "Not filed" | Make sure `claude` works in Terminal and you're logged in. The reason is in grandma's card |
 
 ## Privacy
 
@@ -614,7 +616,7 @@ Idle     ──► one DeepgramRecorder --stream --standby waits with the mic se
   [`grandma_context.py`](src/deepgram_dictation/grandma_context.py) (run by `screen_memory.lua`):
   what grandma knows for a question, and the profile.
 - [`src/deepgram_dictation/meeting.lua`](src/deepgram_dictation/meeting.lua): meeting start/stop,
-  progress, notifications.
+  progress, and grandma's cards about it.
 - [`src/deepgram_dictation/detector.lua`](src/deepgram_dictation/detector.lua) and
   [`prompt.lua`](src/deepgram_dictation/prompt.lua): meeting detection (which apps use the mic,
   browser tab URLs) and the "Transcribe this meeting?" card.
