@@ -70,18 +70,45 @@ final class StatusWriter {
 
 // MARK: - Microphone
 
-/// Captures the default input device as 16 kHz mono Float32 buffers. Re-taps when the input device changes mid-capture (e.g. AirPods connecting). Only
-/// the input node is used: touching the engine's output side makes it pair the mic with the
-/// speakers in an aggregate device, which can deliver no input at all.
+/// Captures a mic (the default input, or a given device) as 16 kHz mono Float32 buffers, through
+/// the HAL output unit (AUHAL) directly.
+///
+/// Not AVAudioEngine: when an input device vanishes (AirPods switching into call mode drop their
+/// input for a moment, or disconnect), AVAudioEngine raised an exception putting its tap back,
+/// which aborted the recorder, and every engine made afterwards in the same process came up
+/// attached to no device with a stale format and never recorded again (2026-10-20,
+/// tests/integration/mic_recovery.sh). Here each start binds the device and sets the format
+/// explicitly, so nothing cached can go stale: on any change the unit is simply built again.
 ///
 /// Never enable voice processing here: when a call app holds the same mic in that mode, it
 /// knocks out the call app's audio.
 final class MicCapture {
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
-    private let engine = AVAudioEngine()
-    private var observer: NSObjectProtocol?
-    private let onBuffer: (AVAudioPCMBuffer, AVAudioTime) -> Void
+    private static let maxFrames: UInt32 = 4096
+
     private let device: AudioDeviceID?
+    private let onBuffer: (AVAudioPCMBuffer, AVAudioTime) -> Void
+    private let process = DispatchQueue(label: "mic", qos: .userInitiated) // conversion, off the audio thread
+    private var unit: AudioUnit?
+    private var bound = AudioDeviceID(0)
+    private var channels = 0
+    private var scratch: UnsafeMutableAudioBufferListPointer?
+    private var converter: AVAudioConverter?
+    private var monoInput: AVAudioFormat?
+    private var running = false
+    private var stopped = false
+    private var recovering = false // a restart is pending: further changes don't start the backoff over
+    private var retry = MicRetry()
+    private var generation = 0     // bumped by every change, so only the latest retry runs
+    private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
+
+    /// Test hook: DEEPGRAM_RECORDER_FAIL_STARTS=G:N lets G mic starts through, then fails the next
+    /// N, the way a mic in the middle of a change fails (tests/integration/mic_recovery.sh).
+    private static var failPlan: (good: Int, bad: Int) = {
+        let parts = (ProcessInfo.processInfo.environment["DEEPGRAM_RECORDER_FAIL_STARTS"] ?? "")
+            .split(separator: ":").compactMap { Int($0) }
+        return parts.count == 2 ? (parts[0], parts[1]) : (0, 0)
+    }()
 
     /// `device` records from that input instead of the system's default one.
     init(device: AudioDeviceID? = nil, onBuffer: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) {
@@ -104,7 +131,16 @@ final class MicCapture {
         return status == noErr && id != 0 ? id : nil
     }
 
-    private var running = false
+    /// The system's default input device right now.
+    static func defaultInputDevice() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
+        return status == noErr && id != 0 ? id : nil
+    }
 
     func start() throws {
         try prepare()
@@ -113,77 +149,230 @@ final class MicCapture {
 
     /// Everything short of switching the mic on: the slow part of starting (about 200 ms, and
     /// seconds when the Mac has been idle). The mic stays off, so no recording indicator shows.
+    /// A mic in the middle of changing (a headset switching modes) gets a few short retries.
     func prepare() throws {
-        try installTap()
-        observer = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
+        var lastError: Error?
+        for attempt in 0..<5 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.2) }
             do {
-                self.engine.inputNode.removeTap(onBus: 0)
-                try self.installTap()
-                if self.running { try self.engine.start() }
+                try build()
+                lastError = nil
+                break
             } catch {
-                FileHandle.standardError.write("mic restart failed: \(error)\n".data(using: .utf8)!)
+                lastError = error
+                FileHandle.standardError.write(Data("mic not ready (\(error)), retrying\n".utf8))
             }
         }
-        engine.prepare()
+        if let lastError { throw lastError }
+        if device == nil {
+            listen(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultInputDevice,
+                   kAudioObjectPropertyScopeGlobal)
+        }
     }
 
-    /// Switches the mic on. Call on the main thread, after prepare().
+    /// Switches the mic on. Call on the main thread, after prepare(). A mic in the middle of a
+    /// change can't start yet: then it starts as soon as it can, rather than fail the recording.
     func run() throws {
-        try engine.start()
         running = true
-    }
-
-    private func installTap() throws {
-        if var id = device {
-            guard let unit = engine.inputNode.audioUnit, AudioUnitSetProperty(
-                unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id,
-                UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr else {
-                throw RecorderError("couldn't record from the chosen input device")
-            }
-        }
-        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
-        let format = Self.format
-        // Multi-channel inputs (the MacBook mic array reports 3 channels, AirPods 9, whenever a call
-        // app uses voice processing) must not go through AVAudioConverter's downmix: it outputs
-        // pure zeros for them. Take the first channel instead; the channels carry the same voice.
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0,
-              let monoInput = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
-                                            channels: 1, interleaved: false),
-              let converter = AVAudioConverter(from: monoInput, to: format) else {
-            throw RecorderError("no microphone input available (is Microphone permission granted?)")
-        }
-        let ratio = format.sampleRate / inputFormat.sampleRate
-        let onBuffer = self.onBuffer
-
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { input, when in
-            guard let channels = input.floatChannelData,
-                  let buffer = AVAudioPCMBuffer(pcmFormat: monoInput, frameCapacity: input.frameLength) else { return }
-            buffer.frameLength = input.frameLength
-            buffer.floatChannelData![0].update(from: channels[0], count: Int(input.frameLength))
-            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
-            guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
-            var supplied = false
-            var error: NSError?
-            converter.convert(to: output, error: &error) { _, status in
-                if supplied {
-                    status.pointee = .noDataNow
-                    return nil
-                }
-                supplied = true
-                status.pointee = .haveData
-                return buffer
-            }
-            if output.frameLength > 0 { onBuffer(output, when) }
+        do {
+            try startUnit()
+        } catch {
+            FileHandle.standardError.write(Data("mic not ready to start (\(error)), retrying\n".utf8))
+            changed()
         }
     }
 
     func stop() {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        guard !stopped else { return }
+        stopped = true
+        for (object, address, block) in listeners {
+            var address = address
+            AudioObjectRemovePropertyListenerBlock(object, &address, DispatchQueue.main, block)
+        }
+        listeners = []
+        teardown()
+    }
+
+    // MARK: Building the unit
+
+    private func check(_ status: OSStatus, _ what: String) throws {
+        if status != noErr { throw RecorderError("\(what) failed (OSStatus \(status))") }
+    }
+
+    /// A new HAL unit on the device, with our own format at the device's rate and channel count.
+    private func build() throws {
+        teardown()
+        guard let target = device ?? Self.defaultInputDevice() else { throw RecorderError("no input device") }
+        var description = AudioComponentDescription(componentType: kAudioUnitType_Output,
+                                                    componentSubType: kAudioUnitSubType_HALOutput,
+                                                    componentManufacturer: kAudioUnitManufacturer_Apple,
+                                                    componentFlags: 0, componentFlagsMask: 0)
+        guard let component = AudioComponentFindNext(nil, &description) else { throw RecorderError("no HAL unit") }
+        var made: AudioUnit?
+        try check(AudioComponentInstanceNew(component, &made), "making the mic unit")
+        guard let unit = made else { throw RecorderError("no mic unit") }
+        self.unit = unit
+        var on: UInt32 = 1, off: UInt32 = 0
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &on, 4),
+                  "enabling input")
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &off, 4),
+                  "disabling output")
+        var id = target
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id,
+                                       UInt32(MemoryLayout<AudioDeviceID>.size)), "choosing the input device")
+        var hardware = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        try check(AudioUnitGetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 1, &hardware, &size),
+                  "reading the mic format")
+        guard MicFormat.usable(rate: hardware.mSampleRate, channels: hardware.mChannelsPerFrame) else {
+            throw RecorderError(String(format: "the mic is changing (%.0f Hz, %d channels)",
+                                       hardware.mSampleRate, hardware.mChannelsPerFrame))
+        }
+        // Every channel, as the device has them: asking the unit for fewer makes it mix them down.
+        // Multi-channel inputs (the MacBook mic array reports 3 channels, AirPods 9 whenever a call
+        // app uses voice processing) carry the same voice on each, so channel 0 is used.
+        let count = Int(hardware.mChannelsPerFrame)
+        var client = AudioStreamBasicDescription(
+            mSampleRate: hardware.mSampleRate, mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: UInt32(count),
+            mBitsPerChannel: 32, mReserved: 0)
+        try check(AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Output, 1, &client,
+                                       UInt32(MemoryLayout<AudioStreamBasicDescription>.size)), "setting the mic format")
+        var maxFrames = Self.maxFrames
+        AudioUnitSetProperty(unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &maxFrames, 4)
+        guard let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hardware.mSampleRate,
+                                       channels: 1, interleaved: false),
+              let converter = AVAudioConverter(from: mono, to: Self.format) else {
+            throw RecorderError("can't convert from \(hardware.mSampleRate) Hz")
+        }
+        let list = AudioBufferList.allocate(maximumBuffers: count)
+        for i in 0..<count {
+            list[i] = AudioBuffer(mNumberChannels: 1, mDataByteSize: Self.maxFrames * 4,
+                                  mData: UnsafeMutableRawPointer.allocate(byteCount: Int(Self.maxFrames) * 4, alignment: 16))
+        }
+        scratch = list
+        channels = count
+        monoInput = mono
+        self.converter = converter
+        var callback = AURenderCallbackStruct(inputProc: { refCon, flags, timeStamp, bus, frames, _ in
+            Unmanaged<MicCapture>.fromOpaque(refCon).takeUnretainedValue().input(flags, timeStamp, bus, frames)
+        }, inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
+        try check(AudioUnitSetProperty(unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 0,
+                                       &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "setting the mic callback")
+        try check(AudioUnitInitialize(unit), "preparing the mic")
+        if bound != target {
+            bound = target
+            // The device's own changes: its input appearing, vanishing or changing rate, or the
+            // device going away.
+            listen(target, kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput)
+            listen(target, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+            listen(target, kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal)
+        }
+    }
+
+    private func startUnit() throws {
+        if Self.failPlan.good > 0 {
+            Self.failPlan.good -= 1
+        } else if Self.failPlan.bad > 0 {
+            Self.failPlan.bad -= 1
+            throw RecorderError("simulated: the mic is changing")
+        }
+        guard let unit else { throw RecorderError("the mic isn't prepared") }
+        try check(AudioOutputUnitStart(unit), "starting the mic")
+    }
+
+    private func teardown() {
+        if let unit {
+            AudioOutputUnitStop(unit)
+            AudioUnitUninitialize(unit)
+            AudioComponentInstanceDispose(unit)
+        }
+        unit = nil
+        // In-flight conversions on `process` finish before the buffers go.
+        process.sync {}
+        if let scratch {
+            for buffer in scratch { buffer.mData?.deallocate() }
+            free(scratch.unsafeMutablePointer)
+        }
+        scratch = nil
+    }
+
+    // MARK: Audio
+
+    /// On the audio thread: pull the frames in, copy channel 0, convert and deliver off this thread.
+    private func input(_ flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>, _ timeStamp: UnsafePointer<AudioTimeStamp>,
+                       _ bus: UInt32, _ frames: UInt32) -> OSStatus {
+        guard let unit, let scratch, let monoInput, let converter, frames <= Self.maxFrames else { return noErr }
+        for i in 0..<channels { scratch[i].mDataByteSize = frames * 4 }
+        let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, scratch.unsafeMutablePointer)
+        guard status == noErr, let data = scratch[0].mData,
+              let buffer = AVAudioPCMBuffer(pcmFormat: monoInput, frameCapacity: frames) else { return status }
+        buffer.frameLength = frames
+        buffer.floatChannelData![0].update(from: data.assumingMemoryBound(to: Float.self), count: Int(frames))
+        let hostTime = timeStamp.pointee.mFlags.contains(.hostTimeValid) ? timeStamp.pointee.mHostTime : mach_absolute_time()
+        let onBuffer = self.onBuffer
+        let format = Self.format
+        process.async {
+            let ratio = format.sampleRate / monoInput.sampleRate
+            guard let output = AVAudioPCMBuffer(pcmFormat: format,
+                                                frameCapacity: AVAudioFrameCount(Double(frames) * ratio) + 32) else { return }
+            var supplied = false
+            var error: NSError?
+            converter.convert(to: output, error: &error) { _, outStatus in
+                if supplied {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                supplied = true
+                outStatus.pointee = .haveData
+                return buffer
+            }
+            if output.frameLength > 0 { onBuffer(output, AVAudioTime(hostTime: hostTime)) }
+        }
+        return noErr
+    }
+
+    // MARK: Changes
+
+    private func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope) {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
+        if AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block) == noErr {
+            listeners.append((object, address, block))
+        }
+    }
+
+    /// The mic changed under us (the default input moved, or the device's input changed or went
+    /// away). Wait for the change to settle, then build the unit again; if that fails, keep
+    /// retrying with a backoff rather than give up on the mic. On the main queue.
+    private func changed() {
+        guard !stopped else { return }
+        generation += 1
+        if !recovering { retry.reset() }
+        recovering = true
+        // One switch sends several changes at once (default input, stream layout, rate): each
+        // only waits for things to settle again. The backoff grows with failed attempts alone.
+        scheduleRestart(after: retry.settle, generation: generation)
+    }
+
+    private func scheduleRestart(after delay: Double, generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, !self.stopped, generation == self.generation else { return }
+            do {
+                try self.build()
+                if self.running { try self.startUnit() }
+                if self.retry.attempts > 0 {
+                    FileHandle.standardError.write(Data("mic restarted after \(self.retry.attempts + 1) attempts\n".utf8))
+                }
+                self.retry.reset()
+                self.recovering = false
+            } catch {
+                let wait = self.retry.next()
+                FileHandle.standardError.write(Data("mic restart failed (\(error)), retrying in \(String(format: "%.2f", wait)) s\n".utf8))
+                self.scheduleRestart(after: wait, generation: generation)
+            }
+        }
     }
 }
 
@@ -204,10 +393,11 @@ final class MicRecorder {
             AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1,
         ]
-        let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
-        self.file = file
+        self.file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        // The file is reached through self, never captured, so closing it here (stop) finalises the
+        // .m4a whatever still holds the callback.
         let capture = MicCapture { [weak self] buffer, when in
-            guard let self else { return }
+            guard let self, let file = self.file else { return }
             if self.paused.isSet { self.wasPaused = true; return }
             if self.wasPaused { self.clock.reanchor(); self.wasPaused = false }
             let time = when.isHostTimeValid ? hostSeconds(when.hostTime) : nowHostSeconds()
@@ -794,7 +984,11 @@ func runStreamMode() -> Never {
     }
     let session = StreamSession(url: url, standby: standby, apiKey: key, saveURL: save, bridgeUID: bridge)
     session.start()
-    dispatchMain()
+    // A real run loop, not dispatchMain(): AVFoundation and CoreAudio learn about device changes on
+    // the main run loop. Without one, after AirPods switched modes every engine kept the old
+    // device's format and the mic never came back (meeting mode, which runs NSApplication, was fine).
+    RunLoop.main.run()
+    exit(0)
 }
 
 // MARK: - Entry point
