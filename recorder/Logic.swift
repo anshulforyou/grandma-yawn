@@ -179,3 +179,32 @@ enum PCM {
         samples.contains { abs($0) > threshold }
     }
 }
+
+/// Whether a mic can be recorded from right now. While a Bluetooth headset switches modes (AirPods
+/// going into call mode when a meeting app takes the mic) its input briefly has no channels.
+enum MicFormat {
+    static func usable(rate: Double, channels: UInt32) -> Bool { rate > 0 && channels > 0 }
+}
+
+/// When to try the mic again after a configuration change or a failed restart. The first try
+/// waits for the change to settle (a headset switching modes sends several changes in a burst),
+/// then backs off gently up to `cap` and keeps trying: speech is lost while the mic is off, and a
+/// meeting recording must never give up on the mic.
+struct MicRetry {
+    let settle: Double
+    let cap: Double
+    private(set) var attempts = 0
+
+    init(settle: Double = 0.15, cap: Double = 1) {
+        self.settle = settle
+        self.cap = cap
+    }
+
+    /// Seconds to wait before the next attempt.
+    mutating func next() -> Double {
+        defer { attempts += 1 }
+        return min(cap, settle * pow(1.5, Double(attempts)))
+    }
+
+    mutating func reset() { attempts = 0 }
+}
