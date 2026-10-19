@@ -2,7 +2,7 @@ LUAROCKS_BIN ?= $(HOME)/.luarocks/bin
 BUSTED   ?= $(shell command -v busted 2>/dev/null || echo $(LUAROCKS_BIN)/busted)
 LUACHECK ?= $(shell command -v luacheck 2>/dev/null || echo $(LUAROCKS_BIN)/luacheck)
 
-.PHONY: test test-lua test-python test-swift test-install test-integration eval-dictation eval-screen render-screens render-badges sounds test-fill test-work lint install uninstall
+.PHONY: test test-lua test-python test-swift test-install test-integration test-mic test-gif eval-dictation eval-screen render-screens render-badges sounds test-fill test-work lint install uninstall
 
 test: test-lua test-python test-swift test-install
 
@@ -22,6 +22,17 @@ test-install:
 test-integration:
 	tests/integration/mic_coexistence.sh
 	SYSTEM_AUDIO=0 tests/integration/mic_coexistence.sh
+
+# Needs Hammerspoon and microphone access; not run in CI. Makes the input vanish and come back
+# (a temporary copy of this Mac's mic, as AirPods do when a call takes the mic) while recorders
+# wait and record, and checks none dies or loses the mic. Plays nothing; about a minute.
+test-mic:
+	tests/integration/mic_recovery.sh
+
+# Needs Hammerspoon; not run in CI. Shows the badge and corner bubble many times, then checks
+# grandma's animations still play at their own speed. About 30 s on screen, takes no input.
+test-gif:
+	tests/integration/gif_speed.sh
 
 # Replays recent saved dictations through the current cleanup prompt (calls Anthropic's API).
 eval-dictation:
@@ -56,7 +67,7 @@ sounds:
 
 lint:
 	$(LUACHECK) src spec scripts
-	shellcheck install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh
+	shellcheck install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh
 
 install:
 	./install.sh

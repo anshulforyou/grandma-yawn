@@ -5,13 +5,15 @@
 -- mascot (scripts/make_grandma_badge.py). Messages that ask something of the user (errors, "No
 -- speech detected") stay as words, in hs.alert.
 --
--- Each animation is a looping GIF that macOS plays by itself (scripts/render_badges.sh draws
--- them): no Lua runs per frame. Drawing live from Lua cost 12 to 35% of a core; a GIF ~8%,
--- and only while it shows. Lua only runs for a moment when the badge changes: it appears
--- growing in, fades out shrinking, and from one kind to the next the pill morphs to the new
--- shape while what is in it crossfades. Settled, the canvas holds two elements, because a GIF
--- makes hs.canvas redraw every element each frame. It never takes focus or clicks, and hides
--- at once when the screen is about to be captured.
+-- Each animation is a looping GIF (scripts/render_badges.sh draws them), played by gif.lua at the
+-- GIF's own speed: a timer moves its frame, nothing else runs per frame. Drawing live from Lua
+-- cost 12 to 35% of a core; a GIF ~8%, and only while it shows. Lua only runs for a moment when
+-- the badge changes: it appears growing in, fades out shrinking, and from one kind to the next the
+-- pill morphs to the new shape while what is in it crossfades. Settled, the canvas holds two
+-- elements, because hs.canvas redraws every element each frame. It never takes focus or clicks,
+-- and hides at once when the screen is about to be captured.
+
+local gifs = require("deepgram_dictation.gif")
 
 local M = {}
 
@@ -29,18 +31,14 @@ local STITCH, MAX_STITCHES = 10, 8 -- spacing in points, and how many show befor
 local MORPH, APPEAR, VANISH = 0.35, 0.15, 0.18 -- seconds
 local TICK = 1 / 50
 
-local canvas, kind, step, anim, suspended
-local gifs = {}
+local canvas, kind, step, anim, suspended, player
 
 local function rgb(hex, alpha)
   return { red = tonumber(hex:sub(1, 2), 16) / 255, green = tonumber(hex:sub(3, 4), 16) / 255,
            blue = tonumber(hex:sub(5, 6), 16) / 255, alpha = alpha or 1 }
 end
 
-local function gif(name)
-  if gifs[name] == nil then gifs[name] = hs.image.imageFromPath(DIR .. name .. ".gif") or false end
-  return gifs[name] or nil
-end
+local function gifPath(name) return DIR .. name .. ".gif" end
 
 local function clamp(x) return math.max(0, math.min(1, x)) end
 local function easeOut(x) return 1 - (1 - x) ^ 3 end
@@ -79,8 +77,12 @@ local function fillingStill(withPill)
   return image
 end
 
-local function image(img, frame, alpha)
-  return { type = "image", image = img, imageAnimates = true, imageScaling = "scaleProportionally",
+-- An image element: a GIF by name, or a still hs.image (filling's flattened stitches).
+local function image(what, frame, alpha)
+  if type(what) == "string" then
+    return gifs.element(gifPath(what), { imageAlpha = alpha or 1, frame = frame })
+  end
+  return { type = "image", image = what, imageAnimates = false, imageScaling = "scaleProportionally",
            imageAlpha = alpha or 1, frame = frame }
 end
 
@@ -96,12 +98,12 @@ local function content(k, x, y, alpha, scale, still)
   if k == "filling" then
     local cx = 14 + math.min(step or 0, MAX_STITCHES) * STITCH + 10
     return { image(still, at(0, 0, w, h), alpha),
-             image(gif("needles"), at(cx - 20, INSET_Y, 40, h - 2 * INSET_Y), alpha) }
+             image("needles", at(cx - 20, INSET_Y, 40, h - 2 * INSET_Y), alpha) }
   elseif MASCOT[k] then
     local m = MASCOT_SIZE
-    return { image(gif(MASCOT[k]), at((w - m) / 2, (h - m) / 2, m, m), alpha) }
+    return { image(MASCOT[k], at((w - m) / 2, (h - m) / 2, m, m), alpha) }
   end
-  return { image(gif(k), at(INSET_X, INSET_Y, w - 2 * INSET_X, h - 2 * INSET_Y), alpha) }
+  return { image(k, at(INSET_X, INSET_Y, w - 2 * INSET_X, h - 2 * INSET_Y), alpha) }
 end
 
 local function place(w, h)
@@ -113,6 +115,8 @@ end
 
 local function stopAnim()
   if anim then anim:stop() anim = nil end
+  gifs.stop(player)
+  player = nil
 end
 
 -- The badge at rest: two elements.
@@ -129,6 +133,7 @@ local function settle()
     table.insert(list, 1, pill(0, 0, w, h))
     canvas:replaceElements(list)
   end
+  player = gifs.play(canvas)
 end
 
 -- Runs `draw(p)` with p going 0 to 1 over `seconds`, then `finish`.
@@ -189,12 +194,12 @@ local function newCanvas()
   canvas:clickActivating(false)
 end
 
--- Makes the canvas and loads the GIFs, so the first show costs nothing.
+-- Makes the canvas and reads the GIFs, so the first show costs nothing.
 function M.setup()
   if canvas then return end
   newCanvas()
-  for name in pairs(WIDTH) do if name ~= "filling" then gif(MASCOT[name] or name) end end
-  gif("needles")
+  for name in pairs(WIDTH) do if name ~= "filling" then gifs.load(gifPath(MASCOT[name] or name)) end end
+  gifs.load(gifPath("needles"))
 end
 
 -- Shows the badge for `newKind` (a key of M.KINDS); for "filling", `n` is the step she is on.
@@ -264,7 +269,9 @@ end
 function M.teardown()
   M.hide(true)
   if canvas then canvas:delete() canvas = nil end
-  gifs = {}
 end
+
+-- For tests: the canvas showing the badge, or nil.
+function M.canvasForTest() return canvas end
 
 return M

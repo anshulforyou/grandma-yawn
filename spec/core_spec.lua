@@ -1506,3 +1506,41 @@ describe("when the recorder or its mic fails", function()
     assert.are.equal("exited with code 2", core.recorderExit(2))
   end)
 end)
+
+describe("playing grandma's GIFs", function()
+  -- A GIF with `n` frames of `delay` hundredths each, as far as gifTiming reads it.
+  local function gif(n, delay)
+    local frame = "\33\249\4\0" .. string.pack("<I2", delay) .. "\0\0" .. "rest of the frame"
+    return "GIF89a" .. string.rep(frame, n)
+  end
+
+  it("reads a GIF's frame count and frame time", function()
+    local frames, seconds = core.gifTiming(gif(48, 12))
+    assert.are.equal(48, frames)
+    assert.are.equal(0.12, seconds)
+  end)
+
+  it("treats a 0 or 1 delay as a sane speed, not a spin", function()
+    local _, seconds = core.gifTiming(gif(10, 0))
+    assert.are.equal(0.02, seconds)
+  end)
+
+  it("ignores what isn't an animated GIF", function()
+    assert.is_nil(core.gifTiming(nil))
+    assert.is_nil(core.gifTiming("\137PNG"))
+    assert.is_nil(core.gifTiming(gif(1, 10)))
+  end)
+
+  it("shows the frame the clock says, so the speed can't drift", function()
+    assert.are.equal(0, core.gifFrame(0, 48, 0.12))
+    assert.are.equal(1, core.gifFrame(0.13, 48, 0.12))
+    assert.are.equal(0, core.gifFrame(48 * 0.12 + 0.01, 48, 0.12)) -- loops
+    -- 8.3 frames a second, however often it is asked
+    local seen, last = 0, nil
+    for i = 0, 1000 do
+      local frame = core.gifFrame(1000 + i / 1000, 48, 0.12)
+      if frame ~= last then seen, last = seen + 1, frame end
+    end
+    assert.is_true(seen >= 8 and seen <= 10, "frames in one second: " .. seen)
+  end)
+end)
