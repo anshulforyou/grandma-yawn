@@ -3,6 +3,7 @@
 -- the yarn in grandma's mascot. Neither ever takes focus; the glow lets clicks through.
 
 local core = require("deepgram_dictation.core")
+local gifs = require("deepgram_dictation.gif")
 
 local M = {}
 
@@ -302,16 +303,16 @@ local SHRINK = 0.45 -- seconds
 local card, cardItem, cardTimer, cardAnim, bubble, spacesWatcher, spokeListener
 local pending = {} -- items waiting in the bubble, newest last
 
-local function mascot()
-  M._mascot = M._mascot or hs.image.imageFromPath(hs.configdir .. "/deepgram_dictation/badges/grandma.gif")
-  return M._mascot
-end
+local MASCOT = hs.configdir .. "/deepgram_dictation/badges/grandma.gif"
+local bubblePlayer -- moves her mascot in the bubble (gif.lua)
 
 local function cornerFrame()
   return (hs.screen.mainScreen() or hs.screen.primaryScreen()):frame()
 end
 
 local function hideBubble()
+  gifs.stop(bubblePlayer)
+  bubblePlayer = nil
   if bubble then bubble:delete() bubble = nil end
 end
 
@@ -332,8 +333,7 @@ local function showBubble(grow)
   local elements = {
     { type = "circle", action = "strokeAndFill", fillColor = rgb(PANEL_BG), strokeColor = rgb(M.ROSE), strokeWidth = 2,
       center = { x = size / 2, y = size / 2 }, radius = BUBBLE / 2, trackMouseUp = true },
-    { type = "image", image = mascot(), imageAnimates = true, imageScaling = "scaleProportionally",
-      frame = { x = pad + 8, y = pad + 8, w = BUBBLE - 16, h = BUBBLE - 16 } },
+    gifs.element(MASCOT, { frame = { x = pad + 8, y = pad + 8, w = BUBBLE - 16, h = BUBBLE - 16 } }),
   }
   if #pending > 1 then
     table.insert(elements, { type = "circle", action = "fill", fillColor = rgb(M.ROSE_DEEP),
@@ -353,6 +353,7 @@ local function showBubble(grow)
   end)
   b:show(grow and 0.2 or 0)
   bubble = b
+  bubblePlayer = gifs.play(b)
 end
 
 local function stopCard()
@@ -537,5 +538,8 @@ function M.teardown()
   pending = {}
   if spacesWatcher then spacesWatcher:stop() spacesWatcher = nil end
 end
+
+-- For tests: the corner bubble's canvas, or nil.
+function M.bubbleForTest() return bubble end
 
 return M

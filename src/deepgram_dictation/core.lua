@@ -431,6 +431,25 @@ function core.wavPeak(data)
   return peak / 32768
 end
 
+-- A GIF's frame count and frame time in seconds (its first frame's delay; grandma's GIFs use one
+-- delay throughout), from the file's bytes. nil when it isn't an animated GIF.
+function core.gifTiming(data)
+  if type(data) ~= "string" or data:sub(1, 3) ~= "GIF" then return nil end
+  local frames, delay = 0, nil
+  for at in data:gmatch("()\33\249\4") do
+    frames = frames + 1
+    delay = delay or string.unpack("<I2", data, at + 4)
+  end
+  if frames < 2 then return nil end
+  return frames, math.max(delay or 10, 2) / 100 -- browsers treat a 0 or 1 delay as 0.1 s; never faster than 50 fps
+end
+
+-- Which frame (0-based) a GIF of `frames` frames, `seconds` each, shows at time `now`: every
+-- copy of a GIF shows the same frame at the same moment, whatever else is on screen.
+function core.gifFrame(now, frames, seconds)
+  return math.floor(now / seconds) % frames
+end
+
 -- Seconds of audio in a 16 kHz mono 16-bit WAV of `bytes` bytes (44 of them header), or 0.
 function core.wavSeconds(bytes)
   return math.max(0, ((bytes or 0) - 44) / 32000)
