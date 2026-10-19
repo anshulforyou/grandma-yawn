@@ -89,7 +89,9 @@ func defaultOutput() -> AudioDeviceID {
 func setMembers(_ device: AudioDeviceID, _ uids: [String]) {
     var a = address(kAudioAggregateDevicePropertyFullSubDeviceList)
     var list = uids as CFArray
-    AudioObjectSetPropertyData(device, &a, 0, nil, UInt32(MemoryLayout<CFArray>.size), &list)
+    withUnsafePointer(to: &list) { pointer in
+        _ = AudioObjectSetPropertyData(device, &a, 0, nil, UInt32(MemoryLayout<CFArray>.size), pointer)
+    }
 }
 
 func inputChannels(_ device: AudioDeviceID) -> Int {

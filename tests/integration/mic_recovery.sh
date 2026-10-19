@@ -210,6 +210,12 @@ read -r secs zeros < <(audio_check "$WORK/meeting2/mic.m4a")
 check "meeting's file is finalised after failed restarts, ${secs}s, live to the end" at_least "$secs" 5 "$zeros"
 
 echo "4. how every recorder ended"
+hung=""
+for f in "$WORK"/*.pid; do
+  name=$(basename "$f" .pid)
+  [[ -f "$WORK/$name.exit" ]] || hung+="$name "
+done
+check "every recorder stopped when told to ${hung:+(still running: $hung)}" test -z "$hung"
 died=""
 for f in "$WORK"/*.exit; do
   code=$(cat "$f")
