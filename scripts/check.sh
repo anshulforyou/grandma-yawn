@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The gate before a push (the pre-push hook runs it; `make hooks` installs the hook) and before an
 # install. Runs the unit tests and lint, then the tests that need this Mac: the mic vanishing under
-# recorders, grandma's animations keeping their speed, and recording beside a call app. Plays no
-# sound and takes no input; about four minutes.
+# recorders, grandma's animations keeping their speed, the health check, and recording beside a
+# call app. Plays no sound and takes no input; about four minutes.
 #
 # The mic tests switch the mic around, so they never run while another app is using it: the gate
 # fails then and says so. Run it again after the call. A skipped test is never a pass.
@@ -56,6 +56,9 @@ RECORDER_APP="$BUILT" tests/integration/mic_recovery.sh || fail "test-mic"
 
 step "Grandma's animations keep their speed (test-gif)"
 tests/integration/gif_speed.sh || fail "test-gif"
+
+step "The daily health check (test-health)"
+tests/integration/health.sh || fail "test-health"
 
 not_in_call
 step "Recording in person beside a call app"

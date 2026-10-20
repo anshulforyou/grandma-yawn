@@ -68,6 +68,10 @@ core.DEFAULTS = {
   taskModel        = nil,       -- e.g. "opus"; nil uses the CLI's default model
   taskMinutes      = 45,        -- a task still working after this long is stopped
   maxTasks         = 3,         -- running at once
+
+  -- Once a day, grandma looks back at what went wrong (crashes, failed dictations, slow mic starts)
+  -- and tells you on her card when something did. Everything stays on this Mac.
+  healthCheck      = true,
 }
 
 core.OPTIONS = {
@@ -1125,6 +1129,121 @@ end
 function core.keyCombo(text)
   local mods, key = core.fillKey(text)
   return (#mods > 0 and (table.concat(mods, "+") .. "+") or "") .. tostring(key)
+end
+
+-- What the daily health check reports, by problem kind: `min` times since the last check before
+-- it is worth telling (1: the first time). Kinds come from health.record, the dictation records
+-- (cleanup-timeout, slow-mic) and crash reports (crash).
+core.HEALTH_KINDS = {
+  crash                  = { min = 1, label = "crashed" },
+  ["recorder-died"]      = { min = 1, label = "The recorder died during a dictation" },
+  ["standby-died"]       = { min = 1, label = "The waiting recorder died" },
+  ["recorder-stopped"]   = { min = 1, label = "A recording stopped while you were still holding Fn" },
+  ["recorder-failed"]    = { min = 1, label = "A dictation couldn't start recording" },
+  ["empty-recording"]    = { min = 1, label = "The mic recorded nothing" },
+  ["upload-failed"]      = { min = 1, label = "Deepgram couldn't be reached" },
+  ["meeting-failed"]     = { min = 1, label = "A meeting recording couldn't start" },
+  ["transcript-failed"]  = { min = 1, label = "A meeting transcript failed" },
+  ["filing-failed"]      = { min = 1, label = "A meeting couldn't be filed" },
+  ["proposal-failed"]    = { min = 1, label = "A meeting's memory proposal failed" },
+  ["stream-fell-back"]   = { min = 3, label = "Dictations fell behind and were uploaded instead" },
+  ["cleanup-timeout"]    = { min = 3, label = "Cleanup ran out of time and pasted Deepgram's text" },
+  ["slow-mic"]           = { min = 3, label = "The mic was slow to start" },
+}
+core.SLOW_MIC_MS = 1500
+
+-- The problems in a saved dictation record (history), as { kind, detail } items.
+function core.dictationProblems(record)
+  local found = {}
+  if type(record) ~= "table" then return found end
+  if type(record.cleanup) == "table" and record.cleanup.status == "timeout" then
+    local detail = string.format("after %s ms", tostring(record.cleanup.ms))
+    table.insert(found, { kind = "cleanup-timeout", detail = detail })
+  end
+  if type(record.micMs) == "number" and record.micMs > core.SLOW_MIC_MS then
+    local detail = string.format("%d ms on %s", record.micMs, tostring(record.device))
+    table.insert(found, { kind = "slow-mic", detail = detail })
+  end
+  return found
+end
+
+-- The app a crash report belongs to, from its file name, or nil when it isn't one of ours.
+function core.crashApp(name)
+  for _, app in ipairs({ "DeepgramRecorder", "GrandmaDrag", "Hammerspoon" }) do
+    if name:sub(1, #app + 1) == app .. "-" and name:match("%.ips$") then return app end
+  end
+  return nil
+end
+
+-- When a crash happened (epoch seconds, local time), from its report's name. Not the file's
+-- modification time: macOS touches old reports again (an Oct 14 report read as a day old on Oct 20).
+function core.crashTime(name)
+  local y, m, d, hh, mm, ss = tostring(name):match("%-(%d%d%d%d)%-(%d%d)%-(%d%d)%-(%d%d)(%d%d)(%d%d)")
+  if not y then return nil end
+  return os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d),
+                   hour = tonumber(hh), min = tonumber(mm), sec = tonumber(ss) })
+end
+
+-- What a crash report says about a crash, from its file name and text: "SIGABRT on Oct 20 at 03:40".
+function core.crashDetail(name, text)
+  local why = type(text) == "string"
+    and (text:match('"signal"%s*:%s*"([%w_]+)"') or text:match('"type"%s*:%s*"(EXC_[%w_]+)"'))
+  local m, d, hh, mm = tostring(name):match("%-%d%d%d%d%-(%d%d)%-(%d%d)%-(%d%d)(%d%d)%d%d")
+  local months = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+  local when = m and string.format("on %s %d at %s:%s", months[tonumber(m)] or m, tonumber(d), hh, mm)
+  if why and when then return why .. " " .. when end
+  return why or when or tostring(name)
+end
+
+local CRASH_NAMES = { DeepgramRecorder = "The recorder", GrandmaDrag = "The drag helper", Hammerspoon = "Hammerspoon" }
+
+-- What the health check shows for `problems` ({ kind, detail, app } items since the last check),
+-- or nil when nothing reaches its kind's `min`: { gist, body }. Crashes come first, then the
+-- rest by how often they happened.
+function core.healthReport(problems)
+  local groups, order = {}, {}
+  for _, p in ipairs(problems or {}) do
+    local key = p.kind == "crash" and ("crash:" .. tostring(p.app)) or p.kind
+    if core.HEALTH_KINDS[p.kind] then
+      if not groups[key] then
+        table.insert(order, key)
+        groups[key] = { kind = p.kind, app = p.app, n = 0, first = #order }
+      end
+      local g = groups[key]
+      g.n = g.n + 1
+      g.detail = p.detail or g.detail
+    end
+  end
+  local lines = {}
+  for _, key in ipairs(order) do
+    local g = groups[key]
+    if g.n >= core.HEALTH_KINDS[g.kind].min then table.insert(lines, g) end
+  end
+  if #lines == 0 then return nil end
+  table.sort(lines, function(a, b)
+    if (a.kind == "crash") ~= (b.kind == "crash") then return a.kind == "crash" end
+    if a.n ~= b.n then return a.n > b.n end
+    return a.first < b.first
+  end)
+  local function times(n) return n == 1 and "once" or (n .. " times") end
+  local body = {}
+  for _, g in ipairs(lines) do
+    local what = g.kind == "crash" and ((CRASH_NAMES[g.app] or g.app) .. " crashed") or core.HEALTH_KINDS[g.kind].label
+    local line = "- " .. what .. ", " .. times(g.n)
+    if g.detail and g.detail ~= "" then line = line .. ". Last: " .. g.detail end
+    table.insert(body, line)
+  end
+  local first = lines[1]
+  local headline = first.kind == "crash" and ((CRASH_NAMES[first.app] or first.app) .. " crashed " .. times(first.n))
+    or (core.HEALTH_KINDS[first.kind].label .. ", " .. times(first.n))
+  local gist = #lines == 1 and (headline .. " since I last looked.")
+    or string.format("%s, and %d other problem%s since I last looked.", headline, #lines - 1, #lines == 2 and "" or "s")
+  return { gist = gist, body = table.concat(body, "\n") }
+end
+
+-- Whether the daily health check is due: a day since the last one (`last` epoch seconds or nil).
+function core.healthDue(now, last)
+  return last == nil or now - last >= 86400
 end
 
 -- Why a survey's proposal is sent back, or nil to accept it. She is told to scroll through the

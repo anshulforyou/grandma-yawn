@@ -18,6 +18,7 @@ local badge = require("deepgram_dictation.badge")
 local sounds = require("deepgram_dictation.sounds")
 local tasks = require("deepgram_dictation.tasks")
 local screenMemory = require("deepgram_dictation.screen_memory")
+local health = require("deepgram_dictation.health")
 
 local M = { core = core, meeting = meeting }
 
@@ -517,6 +518,7 @@ local function keepFailed(reason, recording, s)
   if s then endGlow(s) end
   sounds.play("error")
   log("transcription failed: %s", reason)
+  health.record("upload-failed", reason)
   if not history.enabled() then
     os.remove(recording)
     hs.alert.show("Deepgram error, see Hammerspoon console")
@@ -552,6 +554,7 @@ local function transcribe(label, s)
     setIndicator(nil)
     if s then endGlow(s) end
     log("no audio recorded (%d bytes), not transcribing", #audio)
+    health.record("empty-recording", inputDeviceName())
     hs.alert.show("The mic didn't record anything. Try again.", 3)
     return
   end
@@ -593,7 +596,10 @@ end
 local function finishStreaming(stdout, dict, s, exitCode)
   local result = core.parseStreamOutput(stdout, hs.json.decode) or {}
   local ended = core.recorderExit(exitCode)
-  if ended then log("recorder %s", ended) end
+  if ended then
+    log("recorder %s", ended)
+    health.record("recorder-died", ended)
+  end
   if not sendOnExit then
     os.remove(audioPath)
     setIndicator(nil)
@@ -603,6 +609,7 @@ local function finishStreaming(stdout, dict, s, exitCode)
     if result.error then
       holding = false
       log("recorder stopped: %s", tostring(result.error))
+      if not ended then health.record("recorder-stopped", result.error) end
       hs.alert.show("Recording stopped, see Hammerspoon console", 3)
     end
     return
@@ -617,6 +624,7 @@ local function finishStreaming(stdout, dict, s, exitCode)
     -- The stream failed or fell behind (a slow connection): the recorder never hands back a
     -- partial transcript, so upload the whole recording instead.
     log("streaming failed (%s); falling back to upload", tostring(result.error or ended or stdout))
+    if not ended then health.record("stream-fell-back", result.error) end
     transcribe("slow", s)
   end
 end
@@ -636,6 +644,7 @@ local function standbyEnded(proc, code)
   local wait = core.standbyDelay(standbyFailures)
   log("standby recorder %s; starting another%s", core.recorderExit(code) or "ended",
     wait > 0 and string.format(" in %d s", wait) or "")
+  if core.recorderExit(code) then health.record("standby-died", core.recorderExit(code)) end
   if standbyTimer then standbyTimer:stop() end
   standbyTimer = hs.timer.doAfter(wait, function()
     standbyTimer = nil
@@ -735,6 +744,7 @@ local function startStreaming()
     if proc and proc.task:isRunning() then proc.task:terminate() end
     proc = spawnRecorder(bridgeArgs({ "--stream", "--url", url, "--save", audioPath }))
     if not proc then
+      health.record("recorder-failed", "the streaming recorder didn't start")
       hs.alert.show("Could not start recording, see Hammerspoon console")
       return
     end
@@ -774,6 +784,7 @@ local function startRecording()
   end, { "-q", "-c", "1", "-r", "16000", "-b", "16", audioPath })
   if not recorder:start() then
     recorder = nil
+    health.record("recorder-failed", "sox didn't start")
     hs.alert.show("Could not start recording, see Hammerspoon console")
     return
   end
@@ -969,6 +980,7 @@ function M.start(overrides)
   end)
   badge.setup()
   sounds.setup(cfg, function() return core.inCall(meeting.online(), detector.callers()) end)
+  health.setup(cfg, function() return core.inCall(meeting.online(), detector.callers()) end)
   meeting.setup(cfg, dictPath, updateMenubar)
   detector.setup(cfg, meeting)
   updateMenubar()
@@ -999,6 +1011,7 @@ function M.stop()
   setIndicator(nil)
   badge.teardown()
   sounds.teardown()
+  health.teardown()
 end
 
 return M

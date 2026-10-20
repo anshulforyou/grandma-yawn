@@ -1567,3 +1567,74 @@ describe("playing grandma's GIFs", function()
     assert.is_true(seen >= 8 and seen <= 10, "frames in one second: " .. seen)
   end)
 end)
+
+describe("the daily health check", function()
+  it("finds cleanup timeouts and slow mic starts in a dictation record", function()
+    local found = core.dictationProblems({ cleanup = { status = "timeout", ms = 4000 }, micMs = 2557,
+                                           device = "AirPods" })
+    assert.are.equal(2, #found)
+    assert.are.equal("cleanup-timeout", found[1].kind)
+    assert.are.equal("slow-mic", found[2].kind)
+    assert.are.equal("2557 ms on AirPods", found[2].detail)
+    assert.are.same({}, core.dictationProblems({ cleanup = { status = "ok" }, micMs = 260 }))
+    assert.are.same({}, core.dictationProblems(nil))
+  end)
+
+  it("knows our crash reports from everyone else's", function()
+    assert.are.equal("DeepgramRecorder", core.crashApp("DeepgramRecorder-2026-10-20-014551.ips"))
+    assert.are.equal("Hammerspoon", core.crashApp("Hammerspoon-2026-10-20-014551.ips"))
+    assert.is_nil(core.crashApp("Brave Browser-2026-10-20-014551.ips"))
+    assert.is_nil(core.crashApp("DeepgramRecorderX-2026-10-20.ips"))
+    assert.is_nil(core.crashApp("DeepgramRecorder-2026-10-20.diag"))
+  end)
+
+  it("dates a crash by its report's name", function()
+    local at = core.crashTime("DeepgramRecorder-2026-10-20-014541.0002.ips")
+    assert.are.equal("2026-10-20 01:45:41", os.date("%Y-%m-%d %H:%M:%S", at))
+    assert.is_nil(core.crashTime("odd.ips"))
+  end)
+
+  it("says why and when a crash happened", function()
+    assert.are.equal("SIGABRT on Oct 20 at 03:40", core.crashDetail("DeepgramRecorder-2026-10-20-034011.ips",
+      '{"app_name":"DeepgramRecorder"}\n{"exception" : {"type":"EXC_CRASH","signal":"SIGABRT"}}'))
+    assert.are.equal("EXC_BAD_ACCESS on Oct 9 at 23:05", core.crashDetail("Hammerspoon-2026-10-09-230512.ips",
+      '{"exception" : {"type":"EXC_BAD_ACCESS"}}'))
+    assert.are.equal("on Oct 20 at 03:40", core.crashDetail("DeepgramRecorder-2026-10-20-034011.ips", nil))
+    assert.are.equal("odd.ips", core.crashDetail("odd.ips", "{}"))
+  end)
+
+  it("says nothing when nothing went wrong, or too little to matter", function()
+    assert.is_nil(core.healthReport({}))
+    assert.is_nil(core.healthReport({ { kind = "slow-mic" }, { kind = "cleanup-timeout" }, { kind = "slow-mic" } }))
+    assert.is_nil(core.healthReport({ { kind = "something-new" } }))
+  end)
+
+  it("tells the first crash or lost dictation at once", function()
+    local r = core.healthReport({ { kind = "empty-recording", detail = "AirPods" } })
+    assert.are.equal("The mic recorded nothing, once since I last looked.", r.gist)
+    assert.are.equal("- The mic recorded nothing, once. Last: AirPods", r.body)
+  end)
+
+  it("puts crashes first and counts the rest", function()
+    local r = core.healthReport({
+      { kind = "slow-mic", detail = "900 ms" }, { kind = "slow-mic" },
+      { kind = "slow-mic", detail = "2557 ms on AirPods" },
+      { kind = "crash", app = "DeepgramRecorder", detail = "a.ips" },
+      { kind = "crash", app = "DeepgramRecorder", detail = "b.ips" },
+      { kind = "upload-failed", detail = "timed out" },
+    })
+    assert.are.equal("The recorder crashed 2 times, and 2 other problems since I last looked.", r.gist)
+    assert.are.equal(table.concat({
+      "- The recorder crashed, 2 times. Last: b.ips",
+      "- The mic was slow to start, 3 times. Last: 2557 ms on AirPods",
+      "- Deepgram couldn't be reached, once. Last: timed out",
+    }, "\n"), r.body)
+  end)
+
+  it("is due a day after the last one", function()
+    assert.is_true(core.healthDue(1000, nil))
+    assert.is_false(core.healthDue(1000 + 86399, 1000))
+    assert.is_true(core.healthDue(1000 + 86400, 1000))
+    assert.is_true(core.mergeConfig({}).healthCheck)
+  end)
+end)
