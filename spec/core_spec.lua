@@ -1594,6 +1594,12 @@ describe("the daily health check", function()
     assert.is_nil(core.crashTime("odd.ips"))
   end)
 
+  it("dates a dictation by its record's name, so a flagged one isn't counted again", function()
+    local at = core.dictationTime("2026-10-20_10-00-05-123.json")
+    assert.are.equal("2026-10-20 10:00:05", os.date("%Y-%m-%d %H:%M:%S", at))
+    assert.is_nil(core.dictationTime("notes.json"))
+  end)
+
   it("says why and when a crash happened", function()
     assert.are.equal("SIGABRT on Oct 20 at 03:40", core.crashDetail("DeepgramRecorder-2026-10-20-034011.ips",
       '{"app_name":"DeepgramRecorder"}\n{"exception" : {"type":"EXC_CRASH","signal":"SIGABRT"}}'))

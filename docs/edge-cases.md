@@ -12,6 +12,9 @@ When you fix a bug, add its situation here with a test that fails on the old cod
 | The input vanishes while the recorder waits for Fn | The waiting recorder survives and still starts at once | `make test-mic` |
 | The mic comes back but every read from it fails (-10876) | The recorder rebuilds it at once, backing off while it keeps failing | `make test-mic` |
 | The mic stops delivering and macOS says nothing | Rebuilt after a second of nothing (four while it is still starting) | `swift "a mic is stalled after a second of nothing, or four when it hasn't delivered since starting"` |
+| Fn is released while the mic is being rebuilt | The mic is stopped on the queue that rebuilds it, and the dictation is sent | `make test-mic` |
+| The default input moves from AirPods to the built-in mic | AirPods' later changes no longer restart the built-in mic | No test |
+| The recorder dies mid-dictation | Its WAV is sent with the sizes its header never got | `spec "fills in the sizes a recorder that died never wrote"` |
 | The waiting recorder dies anyway | Another starts at once, then with a growing pause if they keep dying | `spec "restarts a standby at once the first time, then backs off to a minute"` |
 | The mic records nothing | Nothing is sent to Deepgram, and the badge says the mic recorded nothing | `spec "measures the audio in a recording, the header aside"` |
 | AirPods take a second or two to send audio | The built-in mic records until they do, so the first words aren't lost | `swift "bridge sends the built-in mic until the Bluetooth mic is live, then only the Bluetooth mic"`, `spec "covers a Bluetooth mic with the built-in one"` |
@@ -55,4 +58,6 @@ When you fix a bug, add its situation here with a test that fails on the old cod
 |---|---|---|
 | Something fails while nobody is looking | A card says so the next day | `make test-health` |
 | A crash report is touched again later | Counted once, on the day it crashed | `spec "dates a crash by its report's name"` |
+| macOS writes a crash report after a check has run | Told at the next check, once | `make test-health` |
+| A dictation is flagged after it was counted | Not counted again | `spec "dates a dictation by its record's name, so a flagged one isn't counted again"` |
 | Pushing while on a call | `make check` refuses before switching the mic around | No test |

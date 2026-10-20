@@ -17,7 +17,7 @@ SRC="$REPO/src"
 mkdir -p "$WORK/support/dictations" "$WORK/crashes"
 
 # A slow mic start a few minutes ago, a crash report of ours and one of another app's.
-cat > "$WORK/support/dictations/2026-10-20_10-00-00-000.json" <<'EOF'
+cat > "$WORK/support/dictations/$(date -v-2M +%Y-%m-%d_%H-%M-%S)-000.json" <<'EOF'
 { "micMs": 2557, "device": "AirPods", "cleanup": { "status": "ok" } }
 EOF
 # Named for a minute ago, as macOS names them (the check dates crashes by the name).
@@ -25,6 +25,8 @@ STAMP=$(date -v-1M +%Y-%m-%d-%H%M%S)
 WHEN=$(date -v-1M "+on %b %-d at %H:%M")
 echo '{"exception" : {"type":"EXC_CRASH","signal":"SIGABRT"}}' > "$WORK/crashes/DeepgramRecorder-$STAMP.ips"
 echo '{}' > "$WORK/crashes/Brave Browser-$STAMP.ips"
+# A report macOS writes only after a check has run, for a crash from before that check.
+LATE=$(date -v-5M +%Y-%m-%d-%H%M%S)
 
 cat > "$WORK/test.lua" <<EOF
 local out = {}
@@ -77,6 +79,17 @@ check(hs.fs.attributes("$WORK/support/problems") ~= nil, "problems are written t
 check(health.check(false, "$WORK/crashes") == nil and #shown == 1, "not due again until a day has passed")
 hs.timer.usleep(1100000)
 check(health.check(true, "$WORK/crashes") == nil and #shown == 1, "what was reported isn't reported again")
+
+-- A report written late still gets told, once.
+local late = io.open("$WORK/crashes/DeepgramRecorder-$LATE.ips", "w")
+late:write('{"exception" : {"signal":"SIGSEGV"}}') late:close()
+hs.timer.usleep(1100000)
+local r2 = health.check(true, "$WORK/crashes")
+check(r2 ~= nil and #shown == 2 and tostring(r2.body):find("SIGSEGV", 1, true) ~= nil,
+  "a crash report written after the check is still told")
+check(r2 ~= nil and not tostring(r2.body):find("SIGABRT", 1, true), "the earlier crash isn't told again")
+hs.timer.usleep(1100000)
+check(health.check(true, "$WORK/crashes") == nil and #shown == 2, "the late one isn't told twice")
 
 t.timer = hs.timer.doAfter(3, function()
   overlay.teardown()

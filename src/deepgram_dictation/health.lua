@@ -32,10 +32,15 @@ function M.record(kind, detail)
   f:close()
 end
 
-local function lastCheck()
+-- { lastCheck = epoch seconds, crashes = { [report name] = when it crashed } } or {}.
+local function readState()
   local ok, state = pcall(hs.json.read, statePath())
-  return ok and type(state) == "table" and tonumber(state.lastCheck) or nil
+  return ok and type(state) == "table" and state or {}
 end
+
+-- macOS can write a crash report a little after the crash, so reports are looked for from an
+-- hour before the last check, and the ones already told are remembered by name.
+local CRASH_MARGIN = 3600
 
 -- Files in `dir` modified after `since`, as { name, path, modified }.
 local function newFiles(dir, since, match)
@@ -62,8 +67,10 @@ local function read(path)
   return text
 end
 
--- Everything that went wrong since `since` (epoch seconds), as { kind, detail, app } items.
-function M.problemsSince(since, crashDir)
+-- Everything that went wrong since `since` (epoch seconds), as { kind, detail, app } items, and the
+-- crash reports seen ({ [name] = when }). Reports named in `told` are left out.
+function M.problemsSince(since, crashDir, told)
+  told = told or {}
   local problems = {}
   for _, file in ipairs(newFiles(base() .. "/problems", since, function(n) return n:match("%.jsonl$") end)) do
     for line in io.lines(file.path) do
@@ -72,34 +79,48 @@ function M.problemsSince(since, crashDir)
     end
   end
   for _, file in ipairs(newFiles(base() .. "/dictations", since, function(n) return n:match("%.json$") end)) do
+    -- Flagging a dictation rewrites its record: only one recorded since counts.
+    local at = core.dictationTime(file.name)
     local ok, record = pcall(hs.json.read, file.path)
-    if ok then
+    if ok and (not at or at > since) then
       for _, p in ipairs(core.dictationProblems(record)) do table.insert(problems, p) end
     end
   end
-  -- Any report touched since, kept when its name says it crashed since, oldest first.
-  local crashes = {}
-  for _, file in ipairs(newFiles(crashDir or CRASH_DIR, since, core.crashApp)) do
+  -- Any report touched since, kept when its name says it crashed since (less the margin) and it
+  -- wasn't told already, oldest first.
+  local crashes, seen = {}, {}
+  for _, file in ipairs(newFiles(crashDir or CRASH_DIR, since - CRASH_MARGIN, core.crashApp)) do
     local at = core.crashTime(file.name)
-    if at and at > since then table.insert(crashes, { at = at, file = file }) end
+    if at and at > since - CRASH_MARGIN then
+      seen[file.name] = at
+      if not told[file.name] then table.insert(crashes, { at = at, file = file }) end
+    end
   end
   table.sort(crashes, function(a, b) return a.at < b.at end)
   for _, c in ipairs(crashes) do
     local detail = core.crashDetail(c.file.name, read(c.file.path))
     table.insert(problems, { kind = "crash", app = core.crashApp(c.file.name), detail = detail })
   end
-  return problems
+  return problems, seen
 end
 
 -- Looks back over everything since the last check and shows the card when something is worth
 -- telling. `force` checks even when a day hasn't passed. Returns the report shown, or nil.
 function M.check(force, crashDir)
   local now = hs.timer.secondsSinceEpoch() -- not os.time(): file times have fractions of a second
-  local last = lastCheck()
+  local state = readState()
+  local last = tonumber(state.lastCheck)
   if not force and not core.healthDue(now, last) then return nil end
   if inCall and inCall() then return nil end -- the hourly tick tries again
-  local report = core.healthReport(M.problemsSince(last or (now - 86400), crashDir))
-  hs.json.write({ lastCheck = now }, statePath(), true, true)
+  local told = type(state.crashes) == "table" and state.crashes or {}
+  -- A file that vanishes mid-read must not stop every later check before it is recorded.
+  local ok, problems, seen = pcall(M.problemsSince, last or (now - 86400), crashDir, told)
+  if not ok then
+    log("could not look back: %s", tostring(problems))
+    problems, seen = {}, told
+  end
+  hs.json.write({ lastCheck = now, crashes = seen }, statePath(), true, true)
+  local report = core.healthReport(problems)
   if not report then return nil end
   log("%s", report.gist)
   overlay.showCard({ text = { gist = report.gist, body = report.body }, note = "Health", isError = true })

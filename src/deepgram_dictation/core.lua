@@ -1184,6 +1184,14 @@ function core.crashTime(name)
                    hour = tonumber(hh), min = tonumber(mm), sec = tonumber(ss) })
 end
 
+-- When a dictation was recorded, from its record's name ("2026-10-20_10-00-00-000.json"), or nil.
+function core.dictationTime(name)
+  local y, m, d, hh, mm, ss = tostring(name):match("^(%d%d%d%d)%-(%d%d)%-(%d%d)_(%d%d)%-(%d%d)%-(%d%d)")
+  if not y then return nil end
+  return os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d),
+                   hour = tonumber(hh), min = tonumber(mm), sec = tonumber(ss) })
+end
+
 -- What a crash report says about a crash, from its file name and text: "SIGABRT on Oct 20 at 03:40".
 function core.crashDetail(name, text)
   local why = type(text) == "string"

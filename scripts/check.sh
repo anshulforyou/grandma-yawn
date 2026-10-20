@@ -5,7 +5,10 @@
 # call app. Plays no sound and takes no input; about four minutes.
 #
 # The mic tests switch the mic around, so they never run while another app is using it: the gate
-# fails then and says so. Run it again after the call. A skipped test is never a pass.
+# fails then and says so. Run it again after the call. One test can be skipped, the online call
+# test, when the recorder changed since it was installed (it needs the installed copy's permission
+# to record the computer's audio). The gate then says so above CHECK PASSED: run make install and
+# make test-integration before trusting the change in a meeting.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -76,8 +79,10 @@ if [[ -n "$(stamp "$INSTALLED")" && "$(stamp "$INSTALLED")" == "$(stamp "$BUILT"
   PLAY_AUDIO=0 tests/integration/mic_coexistence.sh || fail "the call test, online"
 else
   echo
+  skipped=" (the online call test was skipped, see above)"
+  printf '\033[1;33m%s\033[0m\n' "SKIPPED, not passed: the online call test."
   echo "Not run: the online call test. The recorder changed since it was installed; run make install,"
   echo "allow the mic and computer audio when macOS asks, then make test-integration."
 fi
 
-printf '\n\033[1;32mCHECK PASSED\033[0m\n'
+printf '\n\033[1;32mCHECK PASSED%s\033[0m\n' "${skipped:-}"

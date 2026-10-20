@@ -344,11 +344,16 @@ final class MicCapture {
         for i in 0..<channels { scratch[i].mDataByteSize = frames * 4 }
         let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, scratch.unsafeMutablePointer)
         if status != noErr {
+            let failedAt = nowHostSeconds()
             process.async { [weak self] in
                 guard let self, !self.renderFailing else { return }
                 self.renderFailing = true
                 FileHandle.standardError.write(Data("mic render failed (OSStatus \(status)), restarting it\n".utf8))
-                DispatchQueue.main.async { self.restartSoon() }
+                DispatchQueue.main.async {
+                    // A failure from a unit that has since been restarted is already dealt with.
+                    guard self.startedAt < failedAt else { return }
+                    self.restartSoon()
+                }
             }
         }
         guard status == noErr, let data = scratch[0].mData,
