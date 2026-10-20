@@ -8,7 +8,8 @@
 #      (a call app switches the mic to multi-channel, which once made our recording all zeros),
 #      the computer-audio track is complete and has sound (online mode), and DeepgramRecorder's
 #      CPU use stays low.
-# Run it with your usual mic (built-in, then AirPods) selected as the input.
+# Run it with your usual mic (built-in, then AirPods) selected as the input. RECORDER_APP tests another
+# build; VIA_HAMMERSPOON=1 starts it under Hammerspoon's mic permission (for a fresh build).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -33,7 +34,19 @@ done
 sleep 3
 recorder_args=(--out "$WORK/session")
 [[ "${SYSTEM_AUDIO:-1}" == 1 ]] && recorder_args+=(--system)  # SYSTEM_AUDIO=0 tests an in-person recording
-open -n -a "$APP" --args "${recorder_args[@]}"
+if [[ -n "${VIA_HAMMERSPOON:-}" ]]; then
+  # Under Hammerspoon's mic permission: a freshly built recorder has a new signature, and launched
+  # on its own it would wait for macOS to ask for the mic again. Started once, however many times
+  # the CLI delivers the command.
+  lua_args=$(printf "'%s'," "${recorder_args[@]}")
+  timeout 6 "$HS" -q -t 4 -c "_G.__coexistence = _G.__coexistence or {}
+    if not _G.__coexistence['$WORK'] then
+      _G.__coexistence['$WORK'] = hs.task.new('$APP/Contents/MacOS/DeepgramRecorder', nil, { ${lua_args%,} }):start()
+    end
+    return 'ok'" >/dev/null || true
+else
+  open -n -a "$APP" --args "${recorder_args[@]}"
+fi
 for _ in $(seq 1 40); do grep -q '"recording"' "$WORK/session/status.json" 2>/dev/null && break; sleep 0.25; done
 
 if [[ "$PLAY_AUDIO" == 1 ]]; then
