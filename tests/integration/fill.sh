@@ -11,11 +11,16 @@ set -euo pipefail
 
 PAGE="$(cd "$(dirname "$0")/../fill" && pwd)/product-form.html"
 BRAND="$(cd "$(dirname "$0")/../screens/grandma/acme/brand" && pwd)"
-APP="${BROWSER_APP:-Brave Browser}"
+# shellcheck source=tests/integration/browser.sh
+source "$(dirname "$0")/browser.sh"
 HS() { perl -e 'alarm 30; exec @ARGV' hs -q -t 25 -c "$1"; }
 
-open -na "$APP" --args --new-window "file://$PAGE"
-sleep 3
+# The test page must be the window in front, or grandma works on whatever is (a page another
+# test left open). Close it when done, pass or fail.
+page_close "FILL "
+page_open "$PAGE" "FILL " || exit 1
+trap 'page_close "FILL "' EXIT
+sleep 1
 
 HS '
 local fill = require("deepgram_dictation.screen_fill")
@@ -47,10 +52,11 @@ done
 
 result=$(HS 'return hs.json.encode(_G.fillTest)')
 echo "$result"
-python3 - "$result" <<'PY'
+python3 - "$result" "$(page_title "FILL ")" <<'PY'
 import json, sys
 r = json.loads(sys.argv[1])
-title = r.get("title") or ""
+# The page reports its state in its title. Read it from the browser: its window title can read blank.
+title = sys.argv[2] or r.get("title") or ""
 problems = []
 if r.get("status") != "done":
     problems.append(f"fill ended with {r.get('status')}: {r.get('reason')}")
