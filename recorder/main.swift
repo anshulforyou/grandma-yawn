@@ -98,6 +98,13 @@ final class MicCapture {
     private var converter: AVAudioConverter?
     private var monoInput: AVAudioFormat?
     private var running = false
+    /// On `process`: when the last audio arrived, and whether the render is failing, so a stall
+    /// shows in the log ("mic gave nothing for 2.3 s") instead of only as a short recording.
+    private var lastAudio: Double?
+    private var renderFailing = false
+    private var awaitingAudio = false // on `process`: started, and no audio yet
+    private var startedAt = 0.0    // host seconds the unit last started
+    private var stallTimer: DispatchSourceTimer?
     private var stopped = false
     private var recovering = false // a restart is pending: further changes don't start the backoff over
     private var retry = MicRetry()
@@ -192,6 +199,8 @@ final class MicCapture {
             AudioObjectRemovePropertyListenerBlock(object, &address, MicCapture.notices, block)
         }
         listeners = []
+        stallTimer?.cancel()
+        stallTimer = nil
         teardown()
     }
 
@@ -282,6 +291,29 @@ final class MicCapture {
         }
         guard let unit else { throw RecorderError("the mic isn't prepared") }
         try check(AudioOutputUnitStart(unit), "starting the mic")
+        startedAt = nowHostSeconds()
+        // A fresh start may fail its renders again: that should restart it again.
+        process.async { self.awaitingAudio = true; self.renderFailing = false }
+        watchForStalls()
+    }
+
+    /// Rebuilds a running mic that stopped delivering without CoreAudio saying anything changed
+    /// (MicStall). Checked twice a second on the main queue while the mic is meant to be on.
+    private func watchForStalls() {
+        guard stallTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.5, repeating: 0.5)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.running, !self.recovering, !self.stopped, self.unit != nil else { return }
+            let now = nowHostSeconds()
+            let last = self.process.sync { self.lastAudio }
+            guard MicStall.stalled(now: now, lastAudio: last, startedAt: self.startedAt) else { return }
+            let quiet = now - max(last ?? self.startedAt, self.startedAt)
+            FileHandle.standardError.write(Data(String(format: "mic gave nothing for %.1f s, restarting it\n", quiet).utf8))
+            self.restartSoon()
+        }
+        timer.resume()
+        stallTimer = timer
     }
 
     private func teardown() {
@@ -308,6 +340,14 @@ final class MicCapture {
         guard let unit, let scratch, let monoInput, let converter, frames <= Self.maxFrames else { return noErr }
         for i in 0..<channels { scratch[i].mDataByteSize = frames * 4 }
         let status = AudioUnitRender(unit, flags, timeStamp, bus, frames, scratch.unsafeMutablePointer)
+        if status != noErr {
+            process.async { [weak self] in
+                guard let self, !self.renderFailing else { return }
+                self.renderFailing = true
+                FileHandle.standardError.write(Data("mic render failed (OSStatus \(status)), restarting it\n".utf8))
+                DispatchQueue.main.async { self.restartSoon() }
+            }
+        }
         guard status == noErr, let data = scratch[0].mData,
               let buffer = AVAudioPCMBuffer(pcmFormat: monoInput, frameCapacity: frames) else { return status }
         buffer.frameLength = frames
@@ -315,7 +355,21 @@ final class MicCapture {
         let hostTime = timeStamp.pointee.mFlags.contains(.hostTimeValid) ? timeStamp.pointee.mHostTime : mach_absolute_time()
         let onBuffer = self.onBuffer
         let format = Self.format
-        process.async {
+        process.async { [weak self] in
+            if let self {
+                let now = hostSeconds(hostTime)
+                if let last = self.lastAudio, now - last > 0.5 {
+                    FileHandle.standardError.write(Data(String(format: "mic gave nothing for %.1f s\n", now - last).utf8))
+                }
+                self.lastAudio = now
+                self.renderFailing = false
+                if self.awaitingAudio {
+                    // A restart counts as working once audio arrives, not when the unit starts:
+                    // a unit can start and then fail every render (-10876 after a vanish).
+                    self.awaitingAudio = false
+                    DispatchQueue.main.async { self.retry.reset() }
+                }
+            }
             let ratio = format.sampleRate / monoInput.sampleRate
             guard let output = AVAudioPCMBuffer(pcmFormat: format,
                                                 frameCapacity: AVAudioFrameCount(Double(frames) * ratio) + 32) else { return }
@@ -364,6 +418,15 @@ final class MicCapture {
         scheduleRestart(after: retry.settle, generation: generation)
     }
 
+    /// The mic is on but gives no audio (renders fail, or nothing arrives) and CoreAudio said nothing:
+    /// rebuild it, backing off when rebuilding doesn't help, rather than spin.
+    private func restartSoon() {
+        guard !stopped, running, !recovering else { return }
+        generation += 1
+        recovering = true
+        scheduleRestart(after: retry.next(), generation: generation)
+    }
+
     private func scheduleRestart(after delay: Double, generation: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, !self.stopped, generation == self.generation else { return }
@@ -373,7 +436,6 @@ final class MicCapture {
                 if self.retry.attempts > 0 {
                     FileHandle.standardError.write(Data("mic restarted after \(self.retry.attempts + 1) attempts\n".utf8))
                 }
-                self.retry.reset()
                 self.recovering = false
             } catch {
                 let wait = self.retry.next()

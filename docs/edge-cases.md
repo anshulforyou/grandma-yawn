@@ -10,6 +10,8 @@ When you fix a bug, add its situation here with a test that fails on the old cod
 |---|---|---|
 | The input vanishes mid-dictation (AirPods dropping their mic as a call takes it) | Recording carries on and loses no more than the switch took | `make test-mic` |
 | The input vanishes while the recorder waits for Fn | The waiting recorder survives and still starts at once | `make test-mic` |
+| The mic comes back but every read from it fails (-10876) | The recorder rebuilds it at once, backing off while it keeps failing | `make test-mic` |
+| The mic stops delivering and macOS says nothing | Rebuilt after a second of nothing (four while it is still starting) | `swift "a mic is stalled after a second of nothing, or four when it hasn't delivered since starting"` |
 | The waiting recorder dies anyway | Another starts at once, then with a growing pause if they keep dying | `spec "restarts a standby at once the first time, then backs off to a minute"` |
 | The mic records nothing | Nothing is sent to Deepgram, and the badge says the mic recorded nothing | `spec "measures the audio in a recording, the header aside"` |
 | AirPods take a second or two to send audio | The built-in mic records until they do, so the first words aren't lost | `swift "bridge sends the built-in mic until the Bluetooth mic is live, then only the Bluetooth mic"`, `spec "covers a Bluetooth mic with the built-in one"` |

@@ -26,7 +26,8 @@ import json, subprocess, sys
 names = []
 for user in json.load(sys.stdin):
     name = subprocess.run(["ps", "-o", "comm=", "-p", str(user["pid"])], capture_output=True, text=True).stdout.strip()
-    if "DeepgramRecorder" in name or "Hammerspoon" in name:
+    # Ours, and Siri listening for "Hey Siri" (it reopens each new default input the tests make).
+    if "DeepgramRecorder" in name or "Hammerspoon" in name or user.get("bundleID") == "com.apple.CoreSpeech":
         continue
     names.append(user.get("bundleID") or name.rsplit("/", 1)[-1] or str(user["pid"]))
 print(", ".join(sorted(set(names))))'
