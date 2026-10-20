@@ -208,3 +208,18 @@ struct MicRetry {
 
     mutating func reset() { attempts = 0 }
 }
+
+/// Whether a running mic has stalled: it stopped delivering audio and CoreAudio sent no change to
+/// say so (seen 2026-10-20 after the input vanished and came back: one gap, then nothing to the
+/// end). A mic that has delivered since it started gets `limit` seconds of nothing; one still
+/// starting gets `startLimit`, since AirPods can take over two seconds to send their first audio.
+/// Times are host seconds.
+enum MicStall {
+    static let limit = 1.0
+    static let startLimit = 4.0
+
+    static func stalled(now: Double, lastAudio: Double?, startedAt: Double) -> Bool {
+        if let lastAudio, lastAudio >= startedAt { return now - lastAudio > limit }
+        return now - startedAt > startLimit
+    }
+}
