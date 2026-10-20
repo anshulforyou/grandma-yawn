@@ -1127,6 +1127,19 @@ function core.keyCombo(text)
   return (#mods > 0 and (table.concat(mods, "+") .. "+") or "") .. tostring(key)
 end
 
+-- Why a survey's proposal is sent back, or nil to accept it. She is told to scroll through the
+-- whole page first, but sometimes proposed from the first screenful and missed the blocks below
+-- (2026-10-20). A proposal made before any scroll is sent back once; a page that doesn't scroll
+-- costs one extra turn.
+function core.surveyNotDone(actions, sentBack)
+  if sentBack then return nil end
+  for _, name in ipairs(actions) do
+    if name == "scroll" then return nil end
+  end
+  return "Not yet: you haven't scrolled. Scroll through the rest of the page to the bottom, " ..
+    "so you see every part the task touches, then call propose_changes again."
+end
+
 -- Whether a work or survey action may run (see checkFillAction). While working, text is typed
 -- whole or one line of it at a time, so a long block of copy can go in paragraph by paragraph.
 function core.checkWorkAction(mode, name, input, fields, uploaded)

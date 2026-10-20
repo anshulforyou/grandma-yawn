@@ -1433,6 +1433,13 @@ describe("working on a page", function()
     assert.is_false(core.checkWorkAction("survey", "type", { text = "x" }, {}))
   end)
 
+  it("sends back a survey's proposal once when she never scrolled", function()
+    assert.is_truthy(core.surveyNotDone({}, false))
+    assert.is_truthy(core.surveyNotDone({ "screenshot", "zoom" }, false))
+    assert.is_nil(core.surveyNotDone({ "screenshot", "scroll" }, false))
+    assert.is_nil(core.surveyNotDone({ "screenshot" }, true))
+  end)
+
   it("types only the confirmed text, whole or a line at a time", function()
     assert.is_true(core.checkWorkAction("work", "type", { text = "Meet the Trailrunner 2" }, fields))
     assert.is_true(core.checkWorkAction("work", "type", { text = "Six millimetre drop." }, fields))
