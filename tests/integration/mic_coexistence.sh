@@ -48,6 +48,15 @@ else
   open -n -a "$APP" --args "${recorder_args[@]}"
 fi
 for _ in $(seq 1 40); do grep -q '"recording"' "$WORK/session/status.json" 2>/dev/null && break; sleep 0.25; done
+if ! grep -q '"recording"' "$WORK/session/status.json" 2>/dev/null; then
+  if grep -q 'waiting-permission' "$WORK/session/status.json" 2>/dev/null; then
+    echo "FAIL: DeepgramRecorder is waiting for macOS to allow the microphone (a rebuilt recorder asks again)."
+    echo "      Click Allow in the prompt, or turn it on in System Settings > Privacy & Security > Microphone."
+  else
+    echo "FAIL: the recorder never started recording: $(cat "$WORK/session/status.json" 2>/dev/null || echo 'no status')"
+  fi
+  exit 1
+fi
 
 if [[ "$PLAY_AUDIO" == 1 ]]; then
   say -r 160 "This is the remote participant speaking during the test call. We are checking that recording \
