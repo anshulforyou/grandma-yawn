@@ -778,7 +778,7 @@ local function askScreen(s)
   if s.replyTo then
     -- A reply to a background task: what is said goes to her, the screen isn't needed.
     s.reply = s.replyTo
-    overlay.dismissCard()
+    overlay.dismissCard(s.replyTo)
     sounds.play("ask")
     return
   end

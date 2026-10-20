@@ -1549,7 +1549,12 @@ core.THREAD_ANSWER_CHARS = 1500
 -- grandma spoke first (a task finished, a meeting was filed).
 function core.threadAdd(thread, question, answer, now)
   answer = core.unmark(answer or "")
-  if #answer > core.THREAD_ANSWER_CHARS then answer = answer:sub(1, core.THREAD_ANSWER_CHARS) .. "..." end
+  if #answer > core.THREAD_ANSWER_CHARS then
+    -- Cut on a character boundary: half a character can't be sent as JSON.
+    local stop = core.THREAD_ANSWER_CHARS + 1
+    while stop > 1 and answer:byte(stop) >= 0x80 and answer:byte(stop) < 0xC0 do stop = stop - 1 end
+    answer = answer:sub(1, stop - 1) .. "..."
+  end
   table.insert(thread.turns, { question = question or "(nothing, grandma told you this on her own)", answer = answer })
   while #thread.turns > core.THREAD_TURNS do table.remove(thread.turns, 1) end
   thread.lastAt = now

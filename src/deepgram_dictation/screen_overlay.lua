@@ -435,8 +435,11 @@ function M.openBubble()
   return true
 end
 
--- The card goes without a trace (the user is answering it now).
-function M.dismissCard() stopCard() end
+-- The card for task `taskId` goes without a trace (the user is answering it now). Any other
+-- card is left alone.
+function M.dismissCard(taskId)
+  if cardItem and cardItem.taskId == taskId then stopCard() end
+end
 
 -- Called with each item as it shows, so init can carry it into the conversation.
 function M.onSpoke(fn) spokeListener = fn end
@@ -454,6 +457,7 @@ local box, boxWatch, boxPrev, boxDone, boxFocus -- luacheck: ignore 231
 
 local function closeBox()
   if boxWatch then boxWatch:stop() boxWatch = nil end
+  if boxFocus then boxFocus:stop() boxFocus = nil end
   if box then box:delete() box = nil end
 end
 
@@ -505,8 +509,17 @@ function M.typeBox(at, done)
   if win then win:focus() end
   -- The page's autofocus doesn't hold once the window takes focus: put the cursor in it again.
   local b = box
+  -- Only the box itself loads: a link dropped on it must not bring a page that can post questions.
+  local loaded = false
+  b:policyCallback(function(action)
+    if action == "navigationAction" or action == "navigationResponse" then return not loaded end
+    return false
+  end)
   b:navigationCallback(function(action)
-    if action == "didFinishNavigation" then b:evaluateJavaScript("document.getElementById('t').focus()") end
+    if action == "didFinishNavigation" then
+      loaded = true
+      b:evaluateJavaScript("document.getElementById('t').focus()")
+    end
   end)
   boxFocus = hs.timer.doAfter(0.3, function()
     boxFocus = nil
@@ -534,6 +547,7 @@ function M.teardown()
   stopCard()
   hideBubble()
   closeBox()
+  if boxDone then boxDone:stop() boxDone = nil end
   pending = {}
   if spacesWatcher then spacesWatcher:stop() spacesWatcher = nil end
 end

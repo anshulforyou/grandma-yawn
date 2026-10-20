@@ -753,6 +753,14 @@ describe("screen questions", function()
       assert.are.equal(core.THREAD_ANSWER_CHARS + 3, #thread.turns[#thread.turns].answer)
     end)
 
+    it("trims a long answer on a character boundary", function()
+      local thread = { turns = {} }
+      core.threadAdd(thread, "long", "a" .. string.rep("’", core.THREAD_ANSWER_CHARS), 1)
+      local answer = thread.turns[1].answer
+      assert.truthy(utf8.len(answer))
+      assert.is_true(#answer <= core.THREAD_ANSWER_CHARS + 3)
+    end)
+
     it("marks what she said on her own", function()
       local thread = { turns = {} }
       core.threadAdd(thread, nil, "Task done: ₹600 a day", 1)

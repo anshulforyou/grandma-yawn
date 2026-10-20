@@ -145,7 +145,7 @@ end
 local function card(t, note, gist, isError)
   overlay.showCard({
     text = { gist = core.unmark(gist or t.title), body = t.title }, note = note, isError = isError,
-    footer = "Click to read it all, or hold Fn+Control to reply",
+    footer = "Click to read it all, or hold Fn+Control to reply", taskId = t.id,
     onOpen = function() M.show(t.id) end,
     onShow = function() awaiting = t.id end,
     onHide = function() if awaiting == t.id then awaiting = nil end end,
