@@ -81,6 +81,7 @@ sounds:
 
 lint:
 	$(LUACHECK) src spec scripts
+	python3 scripts/check_edge_cases.py
 	shellcheck -x install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh tests/integration/browser.sh tests/integration/health.sh scripts/check.sh .githooks/pre-push
 
 install:
