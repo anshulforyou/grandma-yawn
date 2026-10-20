@@ -413,6 +413,16 @@ function core.extractTranscript(resp)
   return text
 end
 
+-- The last {"event": `name`, ...} line in `DeepgramRecorder --stream` output, decoded, or nil.
+function core.streamEvent(text, name, decode)
+  local found
+  for line in (text or ""):gmatch("[^\n]+") do
+    local ok, value = pcall(decode, line)
+    if ok and type(value) == "table" and value.event == name then found = value end
+  end
+  return found
+end
+
 -- Result of `DeepgramRecorder --stream`: the last JSON line that isn't a progress event
 -- (e.g. {"event":"listening"}). Returns the decoded table or nil.
 function core.parseStreamOutput(text, decode)

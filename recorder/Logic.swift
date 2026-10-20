@@ -111,22 +111,36 @@ enum StreamCompletion {
     }
 }
 
-/// Covers a Bluetooth mic's start-up with the built-in mic: AirPods send only digital silence for
-/// one to three seconds after recording starts, while they switch into call mode, and speech in
-/// that time would be lost. Until the main mic delivers real audio the bridge mic's buffers are
-/// sent; from the first live main buffer on, only the main mic's.
+/// Covers a Bluetooth mic with the built-in mic whenever it gives nothing. AirPods send only digital
+/// silence for one to three seconds after recording starts, while they switch into call mode, and
+/// again for seconds when a call app switches them mid-dictation (2026-10-20: 1.25 s and 3.25 s of
+/// zeros, the words in them lost). The built-in mic runs throughout: a live main-mic buffer is sent,
+/// a silent one is dropped, and the built-in mic's buffers are sent while the main mic's latest was
+/// silent or none has come for `absentAfter` seconds.
 struct MicBridge {
-    private(set) var handedOver = false
+    static let absentAfter = 0.3
 
-    /// Whether to send a main-mic buffer that is `alive` (not digital silence). The first live one
-    /// hands over for good.
-    mutating func sendMain(alive: Bool) -> Bool {
+    /// The main mic has delivered real audio at least once.
+    private(set) var handedOver = false
+    /// Built-in mic frames sent after the handover, covering the main mic.
+    private(set) var backupFrames = 0
+    private var mainLive = false
+    private var lastMain = -Double.infinity
+
+    /// Whether to send a main-mic buffer that is `alive` (not digital silence), arriving at `now`.
+    mutating func sendMain(alive: Bool, at now: Double) -> Bool {
+        lastMain = now
+        mainLive = alive
         if alive { handedOver = true }
-        return handedOver
+        return alive
     }
 
-    /// Whether to send a bridge-mic buffer.
-    var sendBridge: Bool { !handedOver }
+    /// Whether to send a built-in mic buffer of `frames` frames arriving at `now`.
+    mutating func sendBridge(frames: Int, at now: Double) -> Bool {
+        if mainLive && now - lastMain <= Self.absentAfter { return false }
+        if handedOver { backupFrames += frames }
+        return true
+    }
 
     /// A mic is alive once it delivers anything but digital zeros (a real mic's noise floor is far
     /// above this even in a quiet room).

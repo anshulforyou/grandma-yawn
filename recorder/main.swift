@@ -799,8 +799,10 @@ func printMicUsers() {
 ///
 /// Prints {"event": "listening"} once the mic delivers real audio (Bluetooth mics such as AirPods
 /// are silent for a second or two while they switch on). With --bridge-uid <built-in mic UID>, the
-/// built-in mic is recorded and sent during that start-up, and {"event": "handover"} is printed when
-/// the Bluetooth mic takes over (MicBridge), so the first words aren't lost.
+/// built-in mic records throughout and is sent whenever the Bluetooth mic gives nothing (MicBridge):
+/// its start-up, and a call app switching it mid-dictation. {"event": "handover"} is printed when
+/// the Bluetooth mic first takes over, and {"event": "backup", "seconds": s} at the end says how
+/// long the built-in mic covered for it after that.
 /// SIGINT: stop recording, flush, and print {"transcript": "..."}. If Deepgram's results don't cover
 /// all the audio (a slow connection), prints {"error": ..., "audio": ...} instead of a partial transcript.
 /// SIGTERM: cancel immediately and print nothing.
@@ -811,7 +813,7 @@ final class StreamSession {
     private let saveURL: URL?
     private let queue = DispatchQueue(label: "stream")
     private var capture: MicCapture?
-    private var bridge: MicCapture?      // the built-in mic, while a Bluetooth mic starts up
+    private var bridge: MicCapture?      // the built-in mic, covering a Bluetooth mic that gives nothing
     private let bridgeDevice: AudioDeviceID?
     private var bridgeState = MicBridge()
     private var announcedListening = false
@@ -907,17 +909,16 @@ final class StreamSession {
             let pcm = PCM.int16Data(samples)
             let loud = PCM.hasSignal(samples)
             let alive = MicBridge.alive(samples)
+            let frames = Int(buffer.frameLength)
             self.queue.async {
                 if self.bridge != nil {
+                    let now = nowHostSeconds()
                     if isBridge {
-                        guard self.bridgeState.sendBridge else { return }
+                        guard self.bridgeState.sendBridge(frames: frames, at: now) else { return }
                     } else {
                         let wasBridging = !self.bridgeState.handedOver
-                        guard self.bridgeState.sendMain(alive: alive) else { return }
-                        if wasBridging {
-                            self.emit(["event": "handover"])
-                            DispatchQueue.main.async { self.bridge?.stop() }
-                        }
+                        guard self.bridgeState.sendMain(alive: alive, at: now) else { return }
+                        if wasBridging { self.emit(["event": "handover"]) }
                     }
                 }
                 if loud && !self.announcedListening {
@@ -1010,6 +1011,10 @@ final class StreamSession {
             try? saveHandle.close()
         }
         socket?.cancel(with: .normalClosure, reason: nil)
+        if bridge != nil {
+            let seconds = Double(bridgeState.backupFrames) / MicCapture.format.sampleRate
+            emit(["event": "backup", "seconds": (seconds * 100).rounded() / 100])
+        }
         let covered = audioSeconds.map {
             StreamCompletion.isComplete(transcribedUntil: transcribedUntil, audioSeconds: $0)
         } ?? false
