@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Runs make check before every push (installed by make hooks). The gate tests the files on disk,
+# so it refuses while tracked files have changes that aren't committed: what passed would not be
+# what was pushed.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if ! git diff --quiet HEAD --; then
+  echo "pre-push: commit or stash your changes first, so make check tests what you push." >&2
+  exit 1
+fi
+exec scripts/check.sh
