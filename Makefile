@@ -32,7 +32,7 @@ test-mic:
 # Needs Hammerspoon; not run in CI. Shows the badge and corner bubble many times, then checks
 # grandma's animations still play at their own speed. About 30 s on screen, takes no input.
 test-gif:
-	tests/integration/gif_speed.sh
+	tests/integration/gif_speed.sh tests/integration/browser.sh
 
 # Replays recent saved dictations through the current cleanup prompt (calls Anthropic's API).
 eval-dictation:
@@ -67,7 +67,7 @@ sounds:
 
 lint:
 	$(LUACHECK) src spec scripts
-	shellcheck install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh
+	shellcheck -x install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh tests/integration/browser.sh
 
 install:
 	./install.sh
