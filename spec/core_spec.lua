@@ -417,6 +417,22 @@ describe("wavPeak", function()
   end)
 end)
 
+describe("wavWithSizes", function()
+  it("fills in the sizes a recorder that died never wrote", function()
+    local header = "RIFF" .. string.pack("<I4", 36) .. "WAVEfmt " .. string.rep("\0", 20)
+      .. "data" .. string.pack("<I4", 0)
+    local fixed = core.wavWithSizes(header .. string.rep("\1", 3200))
+    assert.are.equal(44 + 3200, #fixed)
+    assert.are.equal(36 + 3200, string.unpack("<I4", fixed, 5))
+    assert.are.equal(3200, string.unpack("<I4", fixed, 41))
+    assert.are.equal(string.rep("\1", 3200), fixed:sub(45))
+  end)
+
+  it("leaves anything else alone", function()
+    assert.are.equal("nope", core.wavWithSizes("nope"))
+  end)
+end)
+
 describe("noSpeechHint", function()
   it("mentions a low input volume when the recording was quiet", function()
     assert.are.equal("Mic level very low (AirPods Pro, input volume 27%). Check System Settings → Sound → Input.",

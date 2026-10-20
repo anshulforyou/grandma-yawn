@@ -555,6 +555,7 @@ local function transcribe(label, s)
     hs.alert.show("The mic didn't record anything. Try again.", 3)
     return
   end
+  audio = core.wavWithSizes(audio)
 
   local dict = loadDictionary()
   local _, keyterms = cleanup.namesFor(dict)

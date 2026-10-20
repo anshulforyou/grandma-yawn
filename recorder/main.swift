@@ -262,6 +262,9 @@ final class MicCapture {
                                        &callback, UInt32(MemoryLayout<AURenderCallbackStruct>.size)), "setting the mic callback")
         try check(AudioUnitInitialize(unit), "preparing the mic")
         if bound != target {
+            // The old device's changes no longer concern us: left listening, a later AirPods
+            // switch would rebuild the built-in mic mid-recording.
+            unlisten(bound)
             bound = target
             // The device's own changes: its input appearing, vanishing or changing rate, or the
             // device going away.
@@ -340,6 +343,15 @@ final class MicCapture {
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
         if AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block) == noErr {
             listeners.append((object, address, block))
+        }
+    }
+
+    private func unlisten(_ object: AudioObjectID) {
+        listeners.removeAll { entry in
+            guard entry.0 == object else { return false }
+            var address = entry.1
+            AudioObjectRemovePropertyListenerBlock(object, &address, DispatchQueue.main, entry.2)
+            return true
         }
     }
 
@@ -954,9 +966,13 @@ final class StreamSession {
                 guard let self else { return }
                 if sig == SIGTERM { exit(0) }
                 self.stopping = true
-                // Buffers already captured are queued ahead of this, so all audio is sent first.
-                self.capture?.stop()
-                self.bridge?.stop()
+                // The mics are only touched on the main queue, where a rebuild may be under way.
+                // Nothing on main waits on this queue, so this can't deadlock. Buffers already
+                // captured are queued ahead of audioEnded, so all audio is sent first.
+                DispatchQueue.main.sync {
+                    self.capture?.stop()
+                    self.bridge?.stop()
+                }
                 self.queue.async { self.audioEnded() }
             }
             source.resume()

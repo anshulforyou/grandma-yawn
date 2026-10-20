@@ -450,6 +450,15 @@ function core.gifFrame(now, frames, seconds)
   return math.floor(now / seconds) % frames
 end
 
+-- Our 44-byte-header WAV with its sizes set from its length. A recorder that died mid-dictation
+-- never wrote them, and the header then says the file holds no audio.
+function core.wavWithSizes(data)
+  if type(data) ~= "string" or #data < 44 or data:sub(1, 4) ~= "RIFF" or data:sub(37, 40) ~= "data" then
+    return data
+  end
+  return "RIFF" .. string.pack("<I4", #data - 8) .. data:sub(9, 40) .. string.pack("<I4", #data - 44) .. data:sub(45)
+end
+
 -- Seconds of audio in a 16 kHz mono 16-bit WAV of `bytes` bytes (44 of them header), or 0.
 function core.wavSeconds(bytes)
   return math.max(0, ((bytes or 0) - 44) / 32000)
