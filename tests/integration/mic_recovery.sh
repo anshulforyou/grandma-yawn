@@ -20,8 +20,9 @@
 #   4. No recorder process died of a signal.
 #
 # Records from the mic but plays nothing, and puts the default input back afterwards. About a
-# minute. RECORDER_APP=<path to DeepgramRecorder.app> tests another build (the installed one shows
-# the crash); VERBOSE=1 prints what the recorders said; KEEP=1 keeps the work folder.
+# minute and a half. RECORDER_APP=<path to DeepgramRecorder.app> tests another build (the installed
+# one shows the crash); VERBOSE=1 prints what the recorders said; KEEP=1 keeps the work folder;
+# STRESS_ONLY=1 runs only the rapid switching (case 4).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -44,6 +45,11 @@ hs_run() {
 # shellcheck disable=SC2329 # called by the trap
 cleanup() {
   hs_run "for _, t in pairs(_G.__micRecovery or {}) do if t:isRunning() then t:terminate() end end _G.__micRecovery = nil"
+  # A recorder that ignored its stop signals (case 5 says which) mustn't outlive the test.
+  local f
+  for f in "$WORK"/*.pid; do
+    [[ -f "$f" && ! -f "${f%.pid}.exit" ]] && kill -9 "$(cat "$f")" 2>/dev/null || true
+  done
   if [[ -x "$WORK/micswitch" ]]; then "$WORK/micswitch" restore >/dev/null 2>&1 || true; fi
   if [[ -n "${KEEP:-}" ]]; then echo "kept $WORK"; else rm -rf "$WORK"; fi
 }
@@ -125,6 +131,7 @@ check() { # check DESCRIPTION COMMAND...
 }
 NOWHERE="ws://127.0.0.1:9/v1/listen" # nothing listens there: the saved audio is what gets checked
 
+if [[ -z "${STRESS_ONLY:-}" ]]; then
 echo "1. the input vanishes and comes back while recorders wait and record"
 start standby "" --stream --standby --save "$WORK/standby.wav"
 start dictation "" --stream --url "$NOWHERE" --save "$WORK/dictation.wav"
@@ -208,8 +215,32 @@ check "dictation kept recording, ${secs}s, live to the end, lost ${gone}s" at_le
 check "  three failed restarts lost at most 2.5 s" at_most "$gone" 2.5
 read -r secs zeros < <(audio_check "$WORK/meeting2/mic.m4a")
 check "meeting's file is finalised after failed restarts, ${secs}s, live to the end" at_least "$secs" 5 "$zeros"
+fi
 
-echo "4. how every recorder ended"
+# A device going away while the unit is being rebuilt once deadlocked the recorder for good: its
+# device listener ran on the main queue, which was waiting on CoreAudio to tear the unit down
+# (2026-10-20, about one run in four of case 1). Rapid vanishes under several recorders make that
+# overlap likely.
+echo "4. the input vanishes 48 times in bursts under several recorders"
+for n in 1 2 3 4 5 6; do start "rapid$n" "" --out "$WORK/rapid$n"; done
+for n in 1 2; do start "rapiddict$n" "" --stream --url "$NOWHERE" --save "$WORK/rapiddict$n.wav"; done
+for n in 1 2 3 4 5 6; do wait_recording "$WORK/rapid$n" || true; done
+sleep 1
+# Gaps around the settle time plus a rebuild, when a rebuild is most likely under way as the
+# device goes away again.
+for gap in 0.3 0.4 0.5 0.3 0.4 0.5; do "$WORK/micswitch" 8 "$gap" vanish >> "$WORK/rapid.json"; done
+sleep 3
+RAPID="rapid1 rapid2 rapid3 rapid4 rapid5 rapid6 rapiddict1 rapiddict2"
+for name in $RAPID; do signal "$name" INT; done
+stuck=""
+for name in $RAPID; do wait_exit "$name" || stuck+="$name "; done
+check "every recorder stopped after rapid switching ${stuck:+(stuck: $stuck)}" test -z "$stuck"
+for n in 1 2 3 4 5 6; do
+  read -r secs zeros < <(audio_check "$WORK/rapid$n/mic.m4a")
+  check "meeting $n's file is finalised, ${secs}s, live to the end" at_least "$secs" 4 "$zeros"
+done
+
+echo "5. how every recorder ended"
 hung=""
 for f in "$WORK"/*.pid; do
   name=$(basename "$f" .pid)

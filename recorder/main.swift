@@ -83,6 +83,8 @@ final class StatusWriter {
 /// Never enable voice processing here: when a call app holds the same mic in that mode, it
 /// knocks out the call app's audio.
 final class MicCapture {
+    /// Where CoreAudio calls our device listeners: never the main queue (see listen).
+    private static let notices = DispatchQueue(label: "mic-notices")
     static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
     private static let maxFrames: UInt32 = 4096
 
@@ -187,7 +189,7 @@ final class MicCapture {
         stopped = true
         for (object, address, block) in listeners {
             var address = address
-            AudioObjectRemovePropertyListenerBlock(object, &address, DispatchQueue.main, block)
+            AudioObjectRemovePropertyListenerBlock(object, &address, MicCapture.notices, block)
         }
         listeners = []
         teardown()
@@ -337,8 +339,14 @@ final class MicCapture {
 
     private func listen(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope) {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
-        if AudioObjectAddPropertyListenerBlock(object, &address, DispatchQueue.main, block) == noErr {
+        // CoreAudio waits for a listener to return, and tearing the unit down on the main queue
+        // waits for CoreAudio: a listener on the main queue deadlocked the two when a device went
+        // away mid-rebuild (2026-10-20, a meeting recorder hung for good). Listen on a queue of our
+        // own and hop to the main queue without waiting.
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            DispatchQueue.main.async { self?.changed() }
+        }
+        if AudioObjectAddPropertyListenerBlock(object, &address, MicCapture.notices, block) == noErr {
             listeners.append((object, address, block))
         }
     }

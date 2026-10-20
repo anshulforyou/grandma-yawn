@@ -27,6 +27,7 @@ When you fix a bug, add its situation here with a test that fails on the old cod
 |---|---|---|
 | A call app holds the mic in voice processing, multi-channel | Recording leaves the call's mic alone, and our track isn't silent | `make test-integration` |
 | The input vanishes during a meeting recording | The recording carries on and its file is finalised | `make test-mic` |
+| The input vanishes again while the recorder is rebuilding its mic | No deadlock: every recorder still stops when told and finalises its file | `make test-mic` |
 | The computer audio tap skips seconds | The tracks stay aligned through the meeting | `swift "track clock fills a gap with silence"`, `python test_align_follows_drift_through_the_meeting` |
 | Remote speech comes back through the speakers | It is cut from the mic track, own words kept | `python test_cuts_echo_out_of_my_sentence`, `python test_mostly_echo_utterances_go_whole_before_cutting` |
 | Filing with Claude fails | The transcript is still saved | `python test_organize_failure_still_saves_transcript` |
