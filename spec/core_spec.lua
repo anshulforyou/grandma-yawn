@@ -417,6 +417,24 @@ describe("wavPeak", function()
   end)
 end)
 
+describe("streamEvent", function()
+  local function decode(line)
+    local map = {
+      ['{"event":"listening"}'] = { event = "listening" },
+      ['{"event":"backup","seconds":3.2}'] = { event = "backup", seconds = 3.2 },
+      ['{"transcript":"hi"}'] = { transcript = "hi" },
+    }
+    if map[line] == nil then error("bad json") end
+    return map[line]
+  end
+
+  it("finds the recorder's backup line among the others", function()
+    local out = '{"event":"listening"}\nnoise\n{"event":"backup","seconds":3.2}\n{"transcript":"hi"}\n'
+    assert.are.equal(3.2, core.streamEvent(out, "backup", decode).seconds)
+    assert.is_nil(core.streamEvent(out, "handover", decode))
+  end)
+end)
+
 describe("wavWithSizes", function()
   it("fills in the sizes a recorder that died never wrote", function()
     local header = "RIFF" .. string.pack("<I4", 36) .. "WAVEfmt " .. string.rep("\0", 20)

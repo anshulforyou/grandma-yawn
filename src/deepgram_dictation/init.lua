@@ -26,6 +26,7 @@ local cfg, dictPath, recBinary
 local audioPath = (os.getenv("TMPDIR") or "/tmp/") .. "deepgram-dictation.wav"
 local enabled = true
 local handoverAt
+local backupSeconds -- seconds the built-in mic covered for a silent Bluetooth mic, after the handover
 local recorder, startedAt, releasedAt, micReadyAt, cancelled, sendOnExit, tailTimer, slowTimer
 local standby -- { task, device, output }: a recorder with the mic set up but off, see prepareStandby
 local usedStandby -- whether the current dictation started from the standby recorder
@@ -113,6 +114,7 @@ local function takeRecording(via, recording)
     micMs = micReadyAt and startedAt and math.floor((micReadyAt - startedAt) * 1000 + 0.5),
     -- With a Bluetooth mic: when it took over from the built-in mic (nil: no bridge, or it never did).
     handoverMs = handoverAt and startedAt and math.floor((handoverAt - startedAt) * 1000 + 0.5),
+    backupSeconds = backupSeconds,
     tailSeconds = cfg.tailSeconds,
     standby = usedStandby,
     device = inputDeviceName(),
@@ -595,6 +597,8 @@ end
 
 local function finishStreaming(stdout, dict, s, exitCode)
   local result = core.parseStreamOutput(stdout, hs.json.decode) or {}
+  local backup = core.streamEvent(stdout, "backup", hs.json.decode)
+  backupSeconds = backup and tonumber(backup.seconds)
   local ended = core.recorderExit(exitCode)
   if ended then
     log("recorder %s", ended)
@@ -764,6 +768,7 @@ local function startRecording()
   overlay.closePanel(0) -- at once: with Control already down, the screen is captured next
   os.remove(audioPath)
   cancelled, sendOnExit, micReadyAt, usedStandby, holding, handoverAt = false, false, nil, nil, true, nil
+  backupSeconds = nil
   session = { replyTo = replyTo, threadOpen = threadOpen }
   local s = session
   startedAt = hs.timer.secondsSinceEpoch()

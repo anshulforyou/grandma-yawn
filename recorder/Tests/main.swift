@@ -60,12 +60,24 @@ test("a mic is stalled after a second of nothing, or four when it hasn't deliver
 
 test("bridge sends the built-in mic until the Bluetooth mic is live, then only the Bluetooth mic") {
     var bridge = MicBridge()
-    expect(bridge.sendBridge, "bridge audio goes out at first")
-    expect(!bridge.sendMain(alive: false), "a silent main buffer is dropped")
-    expect(bridge.sendBridge, "still bridging")
-    expect(bridge.sendMain(alive: true), "the first live main buffer goes out")
-    expect(!bridge.sendBridge, "bridge stops after the handover")
-    expect(bridge.sendMain(alive: false), "after the handover even quiet main audio goes out")
+    expect(bridge.sendBridge(frames: 160, at: 0.0), "bridge audio goes out at first")
+    expect(!bridge.sendMain(alive: false, at: 0.01), "a silent main buffer is dropped")
+    expect(bridge.sendBridge(frames: 160, at: 0.02), "still bridging")
+    expect(bridge.sendMain(alive: true, at: 0.03), "the first live main buffer goes out")
+    expect(!bridge.sendBridge(frames: 160, at: 0.04), "the built-in mic is held back while the main mic is live")
+    expect(bridge.backupFrames == 0, "start-up cover isn't counted as backup")
+}
+
+test("bridge covers the Bluetooth mic again whenever it goes silent or stops") {
+    var bridge = MicBridge()
+    _ = bridge.sendMain(alive: true, at: 0.0)
+    expect(!bridge.sendMain(alive: false, at: 1.0), "a call switching the AirPods: their zeros are dropped")
+    expect(bridge.sendBridge(frames: 160, at: 1.01), "and the built-in mic covers them")
+    expect(bridge.sendMain(alive: true, at: 4.0), "the AirPods are back")
+    expect(!bridge.sendBridge(frames: 160, at: 4.01), "the built-in mic is held back again")
+    expect(!bridge.sendBridge(frames: 160, at: 4.25), "a short wait between AirPods buffers isn't a stop")
+    expect(bridge.sendBridge(frames: 160, at: 4.4), "no AirPods buffer for 0.4 s: the built-in mic covers it")
+    expect(bridge.backupFrames == 320, "backup frames are counted")
 }
 
 test("a mic is alive once it sends anything but digital zeros") {
