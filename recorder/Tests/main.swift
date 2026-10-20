@@ -47,6 +47,15 @@ test("mic retries settle first, back off, cap, and never stop") {
     expect(many.next() == 1, "still trying after a long outage, at the cap")
 }
 
+test("a mic is stalled after a second of nothing, or four when it hasn't delivered since starting") {
+    expect(!MicStall.stalled(now: 10.9, lastAudio: 10, startedAt: 5), "0.9 s since the last audio")
+    expect(MicStall.stalled(now: 11.1, lastAudio: 10, startedAt: 5), "1.1 s since the last audio")
+    expect(!MicStall.stalled(now: 13.5, lastAudio: nil, startedAt: 10), "AirPods still waking up")
+    expect(MicStall.stalled(now: 14.5, lastAudio: nil, startedAt: 10), "nothing 4.5 s after starting")
+    expect(!MicStall.stalled(now: 13, lastAudio: 9, startedAt: 10), "audio from before a restart doesn't count")
+    expect(MicStall.stalled(now: 14.5, lastAudio: 9, startedAt: 10), "nor does it save a restart that never delivered")
+}
+
 // MARK: MicBridge
 
 test("bridge sends the built-in mic until the Bluetooth mic is live, then only the Bluetooth mic") {

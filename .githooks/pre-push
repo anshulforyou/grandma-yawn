@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Runs make check before every push (installed by make hooks). The gate tests the files on disk,
+# so it refuses while anything isn't committed, untracked files included, and when what is pushed
+# isn't the commit checked out: what passed would not be what was pushed.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "pre-push: commit or stash your changes first, so make check tests what you push." >&2
+  exit 1
+fi
+head=$(git rev-parse HEAD)
+while read -r _ local_sha _ _; do
+  [[ "$local_sha" =~ ^0+$ ]] && continue # deleting a branch
+  # A tag is pushed as the tag object: compare the commit it points at.
+  if [[ "$(git rev-parse "$local_sha^{commit}")" != "$head" ]]; then
+    echo "pre-push: check out what you push ($local_sha), so make check tests it." >&2
+    exit 1
+  fi
+done
+exec scripts/check.sh </dev/null

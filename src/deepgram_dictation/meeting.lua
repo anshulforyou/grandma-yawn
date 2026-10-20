@@ -9,6 +9,7 @@ local core = require("deepgram_dictation.core")
 local sounds = require("deepgram_dictation.sounds")
 local indicator = require("deepgram_dictation.meeting_indicator")
 local overlay = require("deepgram_dictation.screen_overlay")
+local health = require("deepgram_dictation.health")
 
 local M = {}
 
@@ -143,6 +144,7 @@ local function transcribe(dir)
     local ok, err = xpcall(onTranscribed, debug.traceback, stdout, stderr)
     if not ok then
       pcall(log, "unexpected error: %s", tostring(err))
+      pcall(health.record, "transcript-failed", err)
       notify("Meeting transcription failed", "Unexpected error, see the Hammerspoon console. Use the 🎙 menu to retry.")
       setState("idle")
     end
@@ -162,6 +164,7 @@ local function transcribe(dir)
         "Memory proposal ready: grandma review " .. result.folder:lower(), result.proposal)
     elseif result and result.proposalError then
       log("memory proposal failed: %s", result.proposalError)
+      health.record("proposal-failed", result.proposalError)
     end
   end, function(_, stdout, stderr)
     table.insert(out, stdout or "")
@@ -178,6 +181,7 @@ onTranscribed = function(stdout, stderr)
   local result, err = core.parseResultLine(stdout, hs.json.decode)
   if not result then
     log("transcription failed: %s %s", tostring(err), tostring(stderr))
+    health.record("transcript-failed", err)
     notify("Meeting transcription failed", tostring(err) .. "\nUse the 🎙 menu to retry.")
     sounds.play("error")
     setState("idle")
@@ -193,12 +197,14 @@ onTranscribed = function(stdout, stderr)
   if result.grandma and not result.folder then where = "No grandma sweater fits, saved unfiled · " end
   if result.organizeError then
     log("organizing failed: %s", result.organizeError)
+    health.record("filing-failed", result.organizeError)
     where = "Not filed (" .. result.organizeError .. ") · "
   end
   if result.proposal then
     where = where .. "Memory proposal: grandma review " .. result.folder:lower() .. "\n"
   elseif result.proposalError then
     log("memory proposal failed: %s", result.proposalError)
+    health.record("proposal-failed", result.proposalError)
   end
   notify(result.title and ("Copied: " .. result.title) or "Meeting transcript copied",
     string.format("%s%d words · %s\nPaste it anywhere, or click to open.", where, result.words or 0,
@@ -241,6 +247,7 @@ function M.start(mode, source)
       for _, w in ipairs(status.warnings or {}) do hs.alert.show(w, 6) end
       return true
     elseif status.state == "error" then
+      health.record("meeting-failed", status.error)
       hs.alert.show("Couldn't start recording: " .. tostring(status.error), 6)
       sounds.play("error")
       setState("idle")
@@ -248,6 +255,7 @@ function M.start(mode, source)
     end
     return false
   end, 90, function()
+    health.record("meeting-failed", "the recorder didn't start within 90 s")
     hs.alert.show("Recorder didn't start. Check Microphone permission for DeepgramRecorder.", 6)
     sounds.play("error")
     setState("idle")

@@ -8,14 +8,23 @@
 #      (a call app switches the mic to multi-channel, which once made our recording all zeros),
 #      the computer-audio track is complete and has sound (online mode), and DeepgramRecorder's
 #      CPU use stays low.
-# Run it with your usual mic (built-in, then AirPods) selected as the input.
+# Run it with your usual mic (built-in, then AirPods) selected as the input. RECORDER_APP tests another
+# build; VIA_HAMMERSPOON=1 starts it under Hammerspoon's mic permission (for a fresh build).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 APP="${RECORDER_APP:-$HOME/Library/Application Support/deepgram-dictation/DeepgramRecorder.app}"
 HS=/Applications/Hammerspoon.app/Contents/Frameworks/hs/hs
 WORK="$(mktemp -d)"
-trap 'pkill -INT -f "DeepgramRecorder --out $WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
+# A recorder stuck on a permission prompt ignores SIGINT, so it gets SIGKILL after a few seconds.
+# shellcheck disable=SC2329  # run by the EXIT trap
+cleanup() {
+  pkill -INT -f "DeepgramRecorder --out $WORK" 2>/dev/null || true
+  for _ in $(seq 1 12); do pgrep -qf "DeepgramRecorder --out $WORK" || break; sleep 0.25; done
+  pkill -KILL -f "DeepgramRecorder --out $WORK" 2>/dev/null || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 MAX_CPU="${MAX_CPU:-10}"   # % of one core
 PLAY_AUDIO="${PLAY_AUDIO:-1}" # play speech so the computer-audio path is busy, as in a real call
 
@@ -33,8 +42,33 @@ done
 sleep 3
 recorder_args=(--out "$WORK/session")
 [[ "${SYSTEM_AUDIO:-1}" == 1 ]] && recorder_args+=(--system)  # SYSTEM_AUDIO=0 tests an in-person recording
-open -n -a "$APP" --args "${recorder_args[@]}"
+if [[ -n "${VIA_HAMMERSPOON:-}" ]]; then
+  # Under Hammerspoon's mic permission: a freshly built recorder has a new signature, and launched
+  # on its own it would wait for macOS to ask for the mic again. Started once, however many times
+  # the CLI delivers the command.
+  lua_args=$(printf "'%s'," "${recorder_args[@]}")
+  timeout 6 "$HS" -q -t 4 -c "_G.__coexistence = _G.__coexistence or {}
+    if not _G.__coexistence['$WORK'] then
+      _G.__coexistence['$WORK'] = hs.task.new('$APP/Contents/MacOS/DeepgramRecorder', nil, { ${lua_args%,} }):start()
+    end
+    return 'ok'" >/dev/null || true
+else
+  open -n -a "$APP" --args "${recorder_args[@]}"
+fi
 for _ in $(seq 1 40); do grep -q '"recording"' "$WORK/session/status.json" 2>/dev/null && break; sleep 0.25; done
+if ! grep -q '"recording"' "$WORK/session/status.json" 2>/dev/null; then
+  if grep -q 'waiting-permission' "$WORK/session/status.json" 2>/dev/null; then
+    echo "FAIL: DeepgramRecorder is waiting for macOS to allow the microphone (a rebuilt recorder asks again)."
+    echo "      Click Allow in the prompt, or turn it on in System Settings > Privacy & Security > Microphone."
+  elif grep -q '"starting"' "$WORK/session/status.json" 2>/dev/null && grep -q '"captureSystem" : true' "$WORK/session/status.json"; then
+    # Starting the computer audio tap waits on macOS's prompt, so the state stays "starting".
+    echo "FAIL: DeepgramRecorder is stuck starting the computer audio, most likely waiting for macOS to allow it."
+    echo "      Click Allow in the prompt, or turn it on in System Settings > Privacy & Security > Screen & System Audio Recording."
+  else
+    echo "FAIL: the recorder never started recording: $(cat "$WORK/session/status.json" 2>/dev/null || echo 'no status')"
+  fi
+  exit 1
+fi
 
 if [[ "$PLAY_AUDIO" == 1 ]]; then
   say -r 160 "This is the remote participant speaking during the test call. We are checking that recording \

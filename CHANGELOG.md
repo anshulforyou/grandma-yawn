@@ -56,6 +56,15 @@ All notable changes to this project are documented here. The format follows
   when a transcript is saved. Silent while a call that meeting detection sees could hear them. `sounds`, `soundVolume`, `soundsOff`, and
   `dictationSounds` for a tick on plain dictation.
 
+- Grandma looks back once a day (`healthCheck`) at what went wrong: recorder crashes, failed
+  uploads, meetings that failed to file, slow mic starts. When something is worth telling, her
+  card says so. Nothing leaves the Mac.
+- `make check`, the gate before a push or an install: the unit tests and lint, then the tests that
+  need the Mac (the mic vanishing under recorders, GIF speed, the health check, recording beside a
+  call app). It refuses while another app is using the mic. `make hooks` runs it before every push.
+- `docs/edge-cases.md` lists the situations that have broken it, each with the test that covers
+  it, and `make lint` checks every test it names exists.
+
 ### Fixed
 
 - Meeting proposals no longer send sweater memory files named like credentials to Claude.
@@ -64,6 +73,9 @@ All notable changes to this project are documented here. The format follows
   and came back as "bad response". An empty recording is now never sent, and a standby recorder
   that dies is restarted.
 - Grandma's GIFs keep their own speed however long she has been up (they ran 10 to 20x fast).
+- The recorder no longer hangs when a mic vanishes while it is being rebuilt, and rebuilds a mic
+  that stops giving audio or fails every read, which macOS doesn't announce.
+- Grandma looks through the whole page before proposing changes, not just the first screenful.
 
 ### Changed
 

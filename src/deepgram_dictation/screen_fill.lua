@@ -342,6 +342,7 @@ function M.run(fields, scr, progress, done, opts)
   local uploaded = {} -- file id: upload attempts
   local upload -- defined below
   local actions = {}
+  local sentBack = false -- a survey proposal was sent back for not scrolling
   local watcher, deadline
 
   local function finish(summary, status, reason)
@@ -535,6 +536,12 @@ function M.run(fields, scr, progress, done, opts)
       return a.computer and core.fillResult(a.id, content, isError) or core.toolResult(a.id, content, isError)
     end
     if mode == "survey" and a.name == "propose_changes" then
+      local notDone = core.surveyNotDone(actions, sentBack)
+      if notDone then
+        sentBack = true
+        log("survey proposed before scrolling: sent back")
+        return cb(res(notDone, true), true)
+      end
       return finish(a.input, "proposed")
     end
     local ok, why

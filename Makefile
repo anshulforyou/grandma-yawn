@@ -2,9 +2,18 @@ LUAROCKS_BIN ?= $(HOME)/.luarocks/bin
 BUSTED   ?= $(shell command -v busted 2>/dev/null || echo $(LUAROCKS_BIN)/busted)
 LUACHECK ?= $(shell command -v luacheck 2>/dev/null || echo $(LUAROCKS_BIN)/luacheck)
 
-.PHONY: test test-lua test-python test-swift test-install test-integration test-mic test-gif eval-dictation eval-screen render-screens render-badges sounds test-fill test-work lint install uninstall
+.PHONY: check hooks test-health test test-lua test-python test-swift test-install test-integration test-mic test-gif eval-dictation eval-screen render-screens render-badges sounds test-fill test-work lint install uninstall
 
 test: test-lua test-python test-swift test-install
+
+# The gate before a push or an install: unit tests, lint, and the tests on this Mac (mic, animations,
+# the call test). About four minutes, plays nothing; refuses while another app is using the mic.
+check:
+	scripts/check.sh
+
+# Runs make check before every git push.
+hooks:
+	git config core.hooksPath .githooks
 
 test-lua:
 	$(BUSTED)
@@ -33,6 +42,11 @@ test-mic:
 # grandma's animations still play at their own speed. About 30 s on screen, takes no input.
 test-gif:
 	tests/integration/gif_speed.sh
+
+# Needs Hammerspoon; not run in CI. Plants problems and a crash report in a throwaway folder and checks
+# the daily health check shows them on a card, and only once. Shows a card for a few seconds.
+test-health:
+	tests/integration/health.sh
 
 # Replays recent saved dictations through the current cleanup prompt (calls Anthropic's API).
 eval-dictation:
@@ -67,7 +81,8 @@ sounds:
 
 lint:
 	$(LUACHECK) src spec scripts
-	shellcheck install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh
+	python3 scripts/check_edge_cases.py
+	shellcheck -x install.sh uninstall.sh tests/test_install.sh recorder/build.sh recorder/test.sh dragger/build.sh tests/integration/mic_coexistence.sh scripts/render_screens.sh scripts/render_badges.sh tests/integration/fill.sh tests/integration/work.sh tests/integration/mic_recovery.sh tests/integration/gif_speed.sh tests/integration/browser.sh tests/integration/health.sh scripts/check.sh .githooks/pre-push
 
 install:
 	./install.sh
