@@ -82,7 +82,7 @@ function M.problemsSince(since, crashDir, told)
     -- Flagging a dictation rewrites its record: only one recorded since counts.
     local at = core.dictationTime(file.name)
     local ok, record = pcall(hs.json.read, file.path)
-    if ok and (not at or at > since) then
+    if ok and (not at or at >= math.floor(since)) then -- names keep whole seconds
       for _, p in ipairs(core.dictationProblems(record)) do table.insert(problems, p) end
     end
   end

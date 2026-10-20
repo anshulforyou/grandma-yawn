@@ -293,8 +293,9 @@ final class MicCapture {
             throw RecorderError("simulated: the mic is changing")
         }
         guard let unit else { throw RecorderError("the mic isn't prepared") }
-        try check(AudioOutputUnitStart(unit), "starting the mic")
+        // Before the start: a render can fail at once, and must count as this unit's failure.
         startedAt = nowHostSeconds()
+        try check(AudioOutputUnitStart(unit), "starting the mic")
         // A fresh start may fail its renders again: that should restart it again.
         process.async { self.awaitingAudio = true; self.renderFailing = false }
         watchForStalls()

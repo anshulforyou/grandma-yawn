@@ -11,7 +11,8 @@ fi
 head=$(git rev-parse HEAD)
 while read -r _ local_sha _ _; do
   [[ "$local_sha" =~ ^0+$ ]] && continue # deleting a branch
-  if [[ "$local_sha" != "$head" ]]; then
+  # A tag is pushed as the tag object: compare the commit it points at.
+  if [[ "$(git rev-parse "$local_sha^{commit}")" != "$head" ]]; then
     echo "pre-push: check out what you push ($local_sha), so make check tests it." >&2
     exit 1
   fi
