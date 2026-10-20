@@ -545,6 +545,17 @@ local function transcribe(label, s)
   end
   local audio = f:read("a")
   f:close()
+  if core.wavSeconds(#audio) < core.MIN_AUDIO_SECONDS then
+    -- The mic recorded nothing (taken away mid-dictation, or the recorder died as it started).
+    -- Say so, rather than send Deepgram silence and report its puzzling reply.
+    os.remove(recording)
+    setIndicator(nil)
+    if s then endGlow(s) end
+    log("no audio recorded (%d bytes), not transcribing", #audio)
+    hs.alert.show("The mic didn't record anything. Try again.", 3)
+    return
+  end
+  audio = core.wavWithSizes(audio)
 
   local dict = loadDictionary()
   local _, keyterms = cleanup.namesFor(dict)
@@ -579,8 +590,10 @@ local function alertNoSpeech()
   hs.alert.show("No speech detected" .. (hint and ("\n" .. hint) or ""), hint and 5 or 1)
 end
 
-local function finishStreaming(stdout, dict, s)
+local function finishStreaming(stdout, dict, s, exitCode)
   local result = core.parseStreamOutput(stdout, hs.json.decode) or {}
+  local ended = core.recorderExit(exitCode)
+  if ended then log("recorder %s", ended) end
   if not sendOnExit then
     os.remove(audioPath)
     setIndicator(nil)
@@ -603,7 +616,7 @@ local function finishStreaming(stdout, dict, s)
   else
     -- The stream failed or fell behind (a slow connection): the recorder never hands back a
     -- partial transcript, so upload the whole recording instead.
-    log("streaming failed (%s); falling back to upload", tostring(result.error or stdout))
+    log("streaming failed (%s); falling back to upload", tostring(result.error or ended or stdout))
     transcribe("slow", s)
   end
 end
@@ -611,20 +624,42 @@ end
 local function recorderHelper() return meeting.recorderApp() .. "/Contents/MacOS/DeepgramRecorder" end
 
 local prepareStandby -- defined below
+local standbyFailures, standbyTimer = 0, nil
+
+-- A standby recorder ended without being used or dropped: it crashed, or its mic failed. Start a
+-- new one, at once the first time, then with a growing pause (core.standbyDelay) if they keep
+-- ending, so a recorder that keeps dying can't restart every few seconds. One that ran for a
+-- minute or more counts as a fresh start.
+local function standbyEnded(proc, code)
+  if hs.timer.secondsSinceEpoch() - proc.startedAt > 60 then standbyFailures = 0 end
+  standbyFailures = standbyFailures + 1
+  local wait = core.standbyDelay(standbyFailures)
+  log("standby recorder %s; starting another%s", core.recorderExit(code) or "ended",
+    wait > 0 and string.format(" in %d s", wait) or "")
+  if standbyTimer then standbyTimer:stop() end
+  standbyTimer = hs.timer.doAfter(wait, function()
+    standbyTimer = nil
+    prepareStandby()
+  end)
+end
 
 -- Starts DeepgramRecorder in stream mode. The same callbacks serve a standby recorder, which
 -- only becomes `recorder` once the key is pressed.
 local function spawnRecorder(args)
   local key = getApiKey()
   if not key then return nil end
-  local proc = { output = "" }
-  proc.task = hs.task.new(recorderHelper(), function(_, stdout)
+  local proc = { output = "", startedAt = hs.timer.secondsSinceEpoch() }
+  proc.task = hs.task.new(recorderHelper(), function(code, stdout)
     proc.output = proc.output .. (stdout or "")
-    if standby == proc then standby = nil end
+    if standby == proc then
+      -- A waiting recorder ended by itself: start another, so the next press is still quick.
+      standby = nil
+      if not proc.dropped then standbyEnded(proc, code) end
+    end
     if recorder == proc.task then
       recorder = nil
       if slowTimer then slowTimer:stop() slowTimer = nil end
-      finishStreaming(proc.output, proc.dict, proc.session)
+      finishStreaming(proc.output, proc.dict, proc.session, code)
       prepareStandby()
     end
   end, function(_, stdout)
@@ -674,6 +709,8 @@ end
 local function dropStandby()
   local proc = standby
   standby = nil
+  if standbyTimer then standbyTimer:stop() standbyTimer = nil end
+  if proc then proc.dropped = true end
   if proc and proc.task:isRunning() then proc.task:terminate() end
 end
 
@@ -692,7 +729,9 @@ local function startStreaming()
   usedStandby = proc ~= nil and proc.task:isRunning() and proc.device == inputDeviceName()
   if usedStandby then
     proc.task:setInput("start " .. url .. "\n")
+    standbyFailures = 0
   else
+    if proc then proc.dropped = true end
     if proc and proc.task:isRunning() then proc.task:terminate() end
     proc = spawnRecorder(bridgeArgs({ "--stream", "--url", url, "--save", audioPath }))
     if not proc then

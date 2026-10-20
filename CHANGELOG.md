@@ -59,6 +59,11 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 
 - Meeting proposals no longer send sweater memory files named like credentials to Claude.
+- The recorder keeps recording when the mic changes under it (AirPods dropping their mic as a
+  call takes it, a device going away). It used to abort, and an empty recording went to Deepgram
+  and came back as "bad response". An empty recording is now never sent, and a standby recorder
+  that dies is restarted.
+- Grandma's GIFs keep their own speed however long she has been up (they ran 10 to 20x fast).
 
 ### Changed
 

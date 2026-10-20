@@ -431,6 +431,60 @@ function core.wavPeak(data)
   return peak / 32768
 end
 
+-- A GIF's frame count and frame time in seconds (its first frame's delay; grandma's GIFs use one
+-- delay throughout), from the file's bytes. nil when it isn't an animated GIF.
+function core.gifTiming(data)
+  if type(data) ~= "string" or data:sub(1, 3) ~= "GIF" then return nil end
+  local frames, delay = 0, nil
+  for at in data:gmatch("()\33\249\4") do
+    frames = frames + 1
+    delay = delay or string.unpack("<I2", data, at + 4)
+  end
+  if frames < 2 then return nil end
+  return frames, math.max(delay or 10, 2) / 100 -- browsers treat a 0 or 1 delay as 0.1 s; never faster than 50 fps
+end
+
+-- Which frame (0-based) a GIF of `frames` frames, `seconds` each, shows at time `now`: every
+-- copy of a GIF shows the same frame at the same moment, whatever else is on screen.
+function core.gifFrame(now, frames, seconds)
+  return math.floor(now / seconds) % frames
+end
+
+-- Our 44-byte-header WAV with its sizes set from its length. A recorder that died mid-dictation
+-- never wrote them, and the header then says the file holds no audio.
+function core.wavWithSizes(data)
+  if type(data) ~= "string" or #data < 44 or data:sub(1, 4) ~= "RIFF" or data:sub(37, 40) ~= "data" then
+    return data
+  end
+  return "RIFF" .. string.pack("<I4", #data - 8) .. data:sub(9, 40) .. string.pack("<I4", #data - 44) .. data:sub(45)
+end
+
+-- Seconds of audio in a 16 kHz mono 16-bit WAV of `bytes` bytes (44 of them header), or 0.
+function core.wavSeconds(bytes)
+  return math.max(0, ((bytes or 0) - 44) / 32000)
+end
+
+-- Under this much audio there is nothing to transcribe: the mic recorded nothing (it was taken
+-- away, or the recorder died as it started). Uploading that once came back as a puzzling "bad
+-- response" from Deepgram instead of saying what happened.
+core.MIN_AUDIO_SECONDS = 0.1
+
+-- Seconds to wait before starting a new standby recorder after `failures` standbys in a row
+-- ended on their own: at once the first time, then backing off to a minute, so a recorder that
+-- keeps dying can't restart every few seconds.
+function core.standbyDelay(failures)
+  if (failures or 0) <= 1 then return 0 end
+  return math.min(60, 2 ^ (failures - 1))
+end
+
+-- How a recorder process ended, for the log: nil for a normal end, else words. hs.task reports a
+-- process killed by a signal with the signal's number.
+function core.recorderExit(code)
+  if code == nil or code == 0 or code == 15 then return nil end -- 15: we stopped it (SIGTERM)
+  local names = { [6] = "crashed (SIGABRT)", [9] = "was killed (SIGKILL)", [11] = "crashed (SIGSEGV)" }
+  return names[code] or ("exited with code " .. tostring(code))
+end
+
 -- Explains a "No speech detected" result when the microphone looks like the cause.
 -- `peak` is 0..1 (or nil), `volume` the input volume in percent (or nil).
 function core.noSpeechHint(deviceName, volume, peak)

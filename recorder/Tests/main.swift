@@ -25,6 +25,28 @@ func withSamples<R>(_ values: [Float], _ body: (UnsafeBufferPointer<Float>) -> R
     values.withUnsafeBufferPointer(body)
 }
 
+// MARK: MicFormat and MicRetry
+
+test("a mic is usable only with a real rate and at least one channel") {
+    expect(MicFormat.usable(rate: 24000, channels: 1), "AirPods in call mode")
+    expect(MicFormat.usable(rate: 48000, channels: 3), "a mic array")
+    expect(!MicFormat.usable(rate: 0, channels: 0), "a headset mid-switch has no input")
+    expect(!MicFormat.usable(rate: 48000, channels: 0), "no channels")
+}
+
+test("mic retries settle first, back off, cap, and never stop") {
+    var retry = MicRetry(settle: 0.2, cap: 1)
+    let waits = (0..<7).map { _ in retry.next() }
+    let expected = [0.2, 0.3, 0.45, 0.675, 1, 1, 1]
+    expect(zip(waits, expected).allSatisfy { abs($0 - $1) < 1e-9 }, "got \(waits)")
+    expect(waits.prefix(4).reduce(0, +) < 2, "a mic back after four tries has lost under 2 s of speech")
+    retry.reset()
+    expect(retry.next() == 0.2, "a success starts over")
+    var many = MicRetry()
+    for _ in 0..<10_000 { _ = many.next() }
+    expect(many.next() == 1, "still trying after a long outage, at the cap")
+}
+
 // MARK: MicBridge
 
 test("bridge sends the built-in mic until the Bluetooth mic is live, then only the Bluetooth mic") {

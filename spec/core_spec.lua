@@ -417,6 +417,22 @@ describe("wavPeak", function()
   end)
 end)
 
+describe("wavWithSizes", function()
+  it("fills in the sizes a recorder that died never wrote", function()
+    local header = "RIFF" .. string.pack("<I4", 36) .. "WAVEfmt " .. string.rep("\0", 20)
+      .. "data" .. string.pack("<I4", 0)
+    local fixed = core.wavWithSizes(header .. string.rep("\1", 3200))
+    assert.are.equal(44 + 3200, #fixed)
+    assert.are.equal(36 + 3200, string.unpack("<I4", fixed, 5))
+    assert.are.equal(3200, string.unpack("<I4", fixed, 41))
+    assert.are.equal(string.rep("\1", 3200), fixed:sub(45))
+  end)
+
+  it("leaves anything else alone", function()
+    assert.are.equal("nope", core.wavWithSizes("nope"))
+  end)
+end)
+
 describe("noSpeechHint", function()
   it("mentions a low input volume when the recording was quiet", function()
     assert.are.equal("Mic level very low (AirPods Pro, input volume 27%). Check System Settings → Sound → Input.",
@@ -1477,5 +1493,70 @@ describe("working on a page", function()
       { { label = "Hero image", value = "", skip = false, file = { id = "img-1", path = "/x", name = "x" } } }, "IMG")
     assert.is_nil(work.tools[1].configs.left_click)
     assert.are.equal("upload_file", work.tools[2].name)
+  end)
+end)
+
+describe("when the recorder or its mic fails", function()
+  it("measures the audio in a recording, the header aside", function()
+    assert.are.equal(0, core.wavSeconds(44))
+    assert.are.equal(0, core.wavSeconds(0))
+    assert.are.equal(0, core.wavSeconds(nil))
+    assert.are.equal(1, core.wavSeconds(44 + 32000))
+    -- the 2026-10-20 dictation: a header and nothing else, which went to Deepgram anyway
+    assert.is_true(core.wavSeconds(44) < core.MIN_AUDIO_SECONDS)
+    assert.is_true(core.wavSeconds(44 + 32000 * 0.3) >= core.MIN_AUDIO_SECONDS)
+  end)
+
+  it("restarts a standby at once the first time, then backs off to a minute", function()
+    local waits = {}
+    for failures = 0, 9 do table.insert(waits, core.standbyDelay(failures)) end
+    assert.are.same({ 0, 0, 2, 4, 8, 16, 32, 60, 60, 60 }, waits)
+    assert.are.equal(0, core.standbyDelay(nil))
+  end)
+
+  it("names a crash, and stays quiet about normal ends", function()
+    assert.is_nil(core.recorderExit(0))
+    assert.is_nil(core.recorderExit(15))
+    assert.is_nil(core.recorderExit(nil))
+    assert.are.equal("crashed (SIGABRT)", core.recorderExit(6))
+    assert.are.equal("exited with code 2", core.recorderExit(2))
+  end)
+end)
+
+describe("playing grandma's GIFs", function()
+  -- A GIF with `n` frames of `delay` hundredths each, as far as gifTiming reads it.
+  local function gif(n, delay)
+    local frame = "\33\249\4\0" .. string.pack("<I2", delay) .. "\0\0" .. "rest of the frame"
+    return "GIF89a" .. string.rep(frame, n)
+  end
+
+  it("reads a GIF's frame count and frame time", function()
+    local frames, seconds = core.gifTiming(gif(48, 12))
+    assert.are.equal(48, frames)
+    assert.are.equal(0.12, seconds)
+  end)
+
+  it("treats a 0 or 1 delay as a sane speed, not a spin", function()
+    local _, seconds = core.gifTiming(gif(10, 0))
+    assert.are.equal(0.02, seconds)
+  end)
+
+  it("ignores what isn't an animated GIF", function()
+    assert.is_nil(core.gifTiming(nil))
+    assert.is_nil(core.gifTiming("\137PNG"))
+    assert.is_nil(core.gifTiming(gif(1, 10)))
+  end)
+
+  it("shows the frame the clock says, so the speed can't drift", function()
+    assert.are.equal(0, core.gifFrame(0, 48, 0.12))
+    assert.are.equal(1, core.gifFrame(0.13, 48, 0.12))
+    assert.are.equal(0, core.gifFrame(48 * 0.12 + 0.01, 48, 0.12)) -- loops
+    -- 8.3 frames a second, however often it is asked
+    local seen, last = 0, nil
+    for i = 0, 1000 do
+      local frame = core.gifFrame(1000 + i / 1000, 48, 0.12)
+      if frame ~= last then seen, last = seen + 1, frame end
+    end
+    assert.is_true(seen >= 8 and seen <= 10, "frames in one second: " .. seen)
   end)
 end)
