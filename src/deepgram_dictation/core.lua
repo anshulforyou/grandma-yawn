@@ -559,8 +559,9 @@ end
 -- Thinking is adaptive (Sonnet 5.5 can't turn it off) and kept short with a low effort.
 -- `memory` (optional, from grandma_context.py) adds what grandma knows: the profile and the
 -- catalog in the system prompt, memory the question named before the screenshot, and the
--- open_memory tool. The unchanging parts are cached.
-function core.screenRequest(cfg, systemPrompt, question, image, mediaType, memory)
+-- open_memory tool. The unchanging parts are cached. `earlier` (optional, core.threadTurns) is what
+-- was said a moment before in this conversation, so a follow-up can lean on it.
+function core.screenRequest(cfg, systemPrompt, question, image, mediaType, memory, earlier)
   local system = { { type = "text", text = systemPrompt } }
   local content = {}
   local tools
@@ -582,6 +583,15 @@ function core.screenRequest(cfg, systemPrompt, question, image, mediaType, memor
     if memory.openable and #memory.openable > 0 then tools = { core.openMemoryTool(memory.openable) } end
   end
   system[#system].cache_control = { type = "ephemeral" }
+  if earlier and #earlier > 0 then
+    local lines = {}
+    for _, turn in ipairs(earlier) do
+      table.insert(lines, string.format("<turn>\n<they_said>%s</they_said>\n<you_said>%s</you_said>\n</turn>",
+        turn.question, turn.answer))
+    end
+    table.insert(content, { type = "text", text = "<earlier_in_this_conversation>\n" .. table.concat(lines, "\n")
+      .. "\n</earlier_in_this_conversation>" })
+  end
   table.insert(content, { type = "image",
     source = { type = "base64", media_type = mediaType or "image/jpeg", data = image } })
   table.insert(content, { type = "text", text = "<question>" .. question .. "</question>" })
@@ -1527,6 +1537,44 @@ function core.fillGist(fields, status)
   local out = string.format("%s %d %s%s", verb, done, noun, done == 1 and "" or "s")
   if left > 0 then out = out .. string.format(", %d left empty", left) end
   return out .. ". Check it, then save."
+end
+
+-- A conversation with grandma: what was asked and answered, so a follow-up said within
+-- THREAD_SECONDS (or while her card is still open) carries what came before.
+core.THREAD_SECONDS = 300
+core.THREAD_TURNS = 6
+core.THREAD_ANSWER_CHARS = 1500
+
+-- Adds a turn to `thread` ({ turns, lastAt }), keeping the newest THREAD_TURNS. `question` nil:
+-- grandma spoke first (a task finished, a meeting was filed).
+function core.threadAdd(thread, question, answer, now)
+  answer = core.unmark(answer or "")
+  if #answer > core.THREAD_ANSWER_CHARS then
+    -- Cut on a character boundary: half a character can't be sent as JSON.
+    local stop = core.THREAD_ANSWER_CHARS + 1
+    while stop > 1 and answer:byte(stop) >= 0x80 and answer:byte(stop) < 0xC0 do stop = stop - 1 end
+    answer = answer:sub(1, stop - 1) .. "..."
+  end
+  table.insert(thread.turns, { question = question or "(nothing, grandma told you this on her own)", answer = answer })
+  while #thread.turns > core.THREAD_TURNS do table.remove(thread.turns, 1) end
+  thread.lastAt = now
+end
+
+-- The turns a question asked at `now` follows on from: all of them while her card is open
+-- (`open`) or within THREAD_SECONDS of the last, otherwise none.
+function core.threadTurns(thread, now, open)
+  if not thread or #thread.turns == 0 then return {} end
+  if open or (thread.lastAt and now - thread.lastAt <= core.THREAD_SECONDS) then return thread.turns end
+  return {}
+end
+
+-- Seconds a card shows in full before it shrinks to grandma's bubble in the corner.
+core.CARD_SECONDS = 15
+
+-- Top-left corner for a `w` x `h` card in the top right of `frame`.
+function core.cornerOrigin(w, _, frame, margin)
+  margin = margin or 16
+  return { x = frame.x + frame.w - w - margin, y = frame.y + margin }
 end
 
 return core

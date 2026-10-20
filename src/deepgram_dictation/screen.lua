@@ -121,8 +121,8 @@ end
 -- { kind = "insert" | "answer", text } or nil; `info` is { status = "ok" | "timeout" | "error",
 -- ms, reason, memory = names sent with the question, opened = names Claude opened }.
 -- With grandma memory, Claude may stop to open a sweater or project; the question then goes on
--- with that memory, up to MAX_OPENS of them.
-function M.ask(question, shot, done)
+-- with that memory, up to MAX_OPENS of them. `earlier` (optional) is the conversation so far.
+function M.ask(question, shot, done, earlier)
   local key = getApiKey()
   if not key then
     local reason = "No Anthropic key in the Keychain ('" .. cfg.anthropicKeychainName .. "')."
@@ -196,7 +196,7 @@ function M.ask(question, shot, done)
   end
 
   if not memory.enabled() then
-    body = core.screenRequest(cfg, instructions, question, shot.data, "image/jpeg")
+    body = core.screenRequest(cfg, instructions, question, shot.data, "image/jpeg", nil, earlier)
     return post()
   end
   memory.context(question, function(context, err)
@@ -209,7 +209,7 @@ function M.ask(question, shot, done)
     for _, img in ipairs(context and context.images or {}) do
       table.insert(images, img)
     end
-    body = core.screenRequest(cfg, instructions, question, shot.data, "image/jpeg", context)
+    body = core.screenRequest(cfg, instructions, question, shot.data, "image/jpeg", context, earlier)
     post()
   end)
 end

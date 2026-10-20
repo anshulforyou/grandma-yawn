@@ -8,12 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Grandma talks on screen, never in macOS notifications. A finished task, a filed meeting or
+  something she learned shows as her card in the top right, then shrinks into her bubble in
+  the corner until clicked. Follow-ups carry the conversation: Fn+Control while her answer is
+  open, or within 5 minutes, sends what was said before with the question. Answers can also be
+  typed: "click here to type" under an answer opens a box.
 - `bridgeBluetoothMic`: with AirPods, the first words of a dictation are no longer lost while
   they switch into call mode (1 to 3 s). The built-in mic covers that start-up, and the AirPods
   take over once they send audio. Each dictation records when that happened (`handoverMs`).
 - Background tasks: "review this PR", said with Fn+Control, starts a Claude Code background
-  session with your grandma memory. It reports back in a notification when it's done or needs
-  you, and you reply with Fn+Control while its answer is open. It's read-only unless you confirm a
+  session with your grandma memory. It reports back on screen when it's done or needs
+  you, and you reply with Fn+Control while its card or answer is open. It's read-only unless you confirm a
   task that edits, which then works in its own git worktree. It never pushes, comments or merges.
 - Working on a page on screen: grandma looks through a page in its editor, proposes every change
   from memory, and once you confirm, makes them and saves a draft. She never publishes, sends,

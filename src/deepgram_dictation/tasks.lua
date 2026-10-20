@@ -1,7 +1,9 @@
 -- Grandma's background tasks: "review this PR", said with Fn+Control, starts a Claude Code session
 -- in the background (task_agent.py) with the user's grandma memory, and she comes back when it is
--- done or when she needs something. Her answer shows in a notification and, on a click, in the
--- panel; holding Fn+Control while that panel is open replies to her, and she carries on.
+-- done or when she needs something. She says so in a card in the top right (never a macOS
+-- notification), which shrinks into her bubble in the corner if it isn't opened; a click opens her
+-- whole answer. Holding Fn+Control while the card or that panel is open replies to her, and she
+-- carries on.
 --
 -- Claude Code runs the session (`claude --bg`) and keeps its state in ~/.claude/jobs/<id>/: this
 -- module reads that every few seconds while a task is working and never runs Lua otherwise. The
@@ -135,17 +137,26 @@ function M.show(id)
     NOTE[t.state] or t.state, t.state == "failed", {
       onReturn = function() awaiting = nil attach(id) end,
       onEscape = function() if awaiting == id then awaiting = nil end end,
-    })
+    }, nil, { corner = true, typeable = t.state ~= "working" and { replyTo = id } or nil })
+end
+
+-- Her card for task `t`: `gist` on top, the task's title under it. While it shows, Fn+Control
+-- replies to her.
+local function card(t, note, gist, isError)
+  overlay.showCard({
+    text = { gist = core.unmark(gist or t.title), body = t.title }, note = note, isError = isError,
+    footer = "Click to read it all, or hold Fn+Control to reply", taskId = t.id,
+    onOpen = function() M.show(t.id) end,
+    onShow = function() awaiting = t.id end,
+    onHide = function() if awaiting == t.id then awaiting = nil end end,
+  })
 end
 
 local function notify(t, event, state)
-  local title = ({ blocked = "Grandma needs you", done = "Grandma finished", failed = "Grandma's task failed" })[event]
-  if not title then return end
+  local note = ({ blocked = "Needs you", done = "Done", failed = "Failed" })[event]
+  if not note then return end
   sounds.play(({ blocked = "ask", done = "done", failed = "error" })[event])
-  local body = event == "blocked" and (state.needs or state.detail) or state.detail
-  hs.notify.new(function() M.show(t.id) end, {
-    title = title, subTitle = t.title, informativeText = core.unmark(body or ""), withdrawAfter = 0,
-  }):send()
+  card(t, note, event == "blocked" and (state.needs or state.detail) or state.detail, event == "failed")
 end
 
 local function anyWorking()
@@ -173,9 +184,7 @@ local function check()
         t.state = "stopped"
         changed = true
         agent({ "stop", "--id", t.id }, function() end)
-        hs.notify.new(function() M.show(t.id) end, { title = "Grandma stopped a task", subTitle = t.title,
-          informativeText = "Still working after " .. cfg.taskMinutes .. " minutes. Open it to carry on.",
-          withdrawAfter = 0 }):send()
+        card(t, "Stopped", "Still working after " .. cfg.taskMinutes .. " minutes, so I stopped. Reply to carry on.")
       end
     end
   end

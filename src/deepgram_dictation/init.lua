@@ -32,6 +32,8 @@ local holding = false -- the key is down for the current recording (it can't be 
 -- The current dictation. A screen question keeps its state here (asked, shot, error) so that a
 -- dictation started while grandma is still answering can't mix with it.
 local session
+-- The conversation with grandma so far (core.threadAdd), so a follow-up carries what came before.
+local thread = { turns = {} }
 local delivered = 0
 local indicator, menubar, apiKey
 
@@ -307,6 +309,7 @@ local function answerScreen(raw, recording, record, s)
               "Couldn't start", true)
           else
             sounds.play("fill")
+            core.threadAdd(thread, raw, "I started a background task: " .. answer.task.goal, os.time())
             overlay.showPanel(answer.task.goal .. "\n\nShe'll tell you when it's done, or if she needs you.",
               "On it, in the background")
           end
@@ -339,6 +342,9 @@ local function answerScreen(raw, recording, record, s)
       return fillForm(answer, s, recording, record)
     end
     sounds.play(not answer and "error" or answer.kind == "insert" and "insert" or "answer")
+    if answer and (answer.kind == "insert" or answer.kind == "answer") then
+      core.threadAdd(thread, raw, answer.text, os.time())
+    end
     if answer and answer.kind == "fill" then
       -- Not asked outright: nothing is touched until the user has seen the plan and said yes.
       local pictures = {}
@@ -379,10 +385,11 @@ local function answerScreen(raw, recording, record, s)
       pasteText(answer.text)
     elseif answer then
       hs.pasteboard.setContents(core.unmark(answer.text))
-      overlay.showPanel({ gist = answer.gist, body = answer.text }, "Copied")
+      overlay.showPanel({ gist = answer.gist, body = answer.text }, "Copied", nil, nil, nil, { typeable = {} })
     else
       hs.pasteboard.setContents(raw)
-      overlay.showPanel(tostring(info.reason) .. "\n\nYour question is on the clipboard.", "Couldn't answer", true)
+      overlay.showPanel(tostring(info.reason) .. "\n\nYour question is on the clipboard.", "Couldn't answer", true,
+        nil, nil, { typeable = {} })
     end
     saveScreen(recording, record)
   end
@@ -415,7 +422,49 @@ local function answerScreen(raw, recording, record, s)
     return
   end
   setIndicator("thinking")
-  screen.ask(raw, s.shot, finish)
+  local earlier = core.threadTurns(thread, os.time(), s.threadOpen)
+  record.earlier = #earlier > 0 and #earlier or nil
+  screen.ask(raw, s.shot, finish, earlier)
+end
+
+-- Sends `raw` (said or typed) to background task `id`, and records it.
+local function replyToTask(id, raw, recording, record)
+  tasks.reply(id, raw, function(err)
+    record.task = { reply = id, status = err and "error" or "ok", reason = err }
+    if err then
+      sounds.play("error")
+      hs.pasteboard.setContents(raw)
+      overlay.showPanel("Couldn't send that: " .. err .. "\n\nWhat you said is on the clipboard.",
+        "Couldn't reply", true)
+    else
+      sounds.play("fill")
+      core.threadAdd(thread, raw, "(passed on to the background task, she is back on it)", os.time())
+      overlay.showPanel(raw, "Sent. She's back on it")
+    end
+    history.save(recording, record)
+  end)
+end
+
+-- Something typed into the box under a panel, handled as if it had been said with Fn+Control:
+-- a reply to her task, or a follow-up about the screen as it is now.
+local function askTyped(text, ctx)
+  local record = { at = os.date("!%Y-%m-%dT%H:%M:%SZ"), via = "typed", raw = text }
+  if ctx.replyTo then return replyToTask(ctx.replyTo, text, "", record) end
+  record.via = "typed+screen"
+  local s = { asked = true, typed = true, threadOpen = true }
+  if not recorder then session = s end
+  sounds.play("ask")
+  overlay.hideForCapture(true)
+  screen.capture(function(shot, err)
+    overlay.hideForCapture(false)
+    if err then
+      s.error = "Couldn't capture the screen (" .. err .. ")."
+    else
+      s.shot = shot
+      overlay.showGlow(shot.screen)
+    end
+    answerScreen(text, "", record, s)
+  end)
 end
 
 -- Cleans the transcript, pastes it and records the dictation (or asks grandma, see answerScreen).
@@ -436,19 +485,7 @@ local function deliver(raw, dict, via, moved, s)
     record.via = via .. "+task"
     clearBadge(s)
     if raw == "" then return history.save(recording, record) end
-    return tasks.reply(s.reply, raw, function(err)
-      record.task = { reply = s.reply, status = err and "error" or "ok", reason = err }
-      if err then
-        sounds.play("error")
-        hs.pasteboard.setContents(raw)
-        overlay.showPanel("Couldn't send that: " .. err .. "\n\nWhat you said is on the clipboard.",
-          "Couldn't reply", true)
-      else
-        sounds.play("fill")
-        overlay.showPanel(raw, "Sent. She's back on it")
-      end
-      history.save(recording, record)
-    end)
+    return replyToTask(s.reply, raw, recording, record)
   end
   if s and s.asked then
     record.via = via .. "+screen"
@@ -674,10 +711,11 @@ local function startRecording()
   screenFill.stop("you started a dictation")
   -- A task's panel open as this starts: Fn+Control now replies to her (closing it forgets that).
   local replyTo = tasks.awaiting()
+  local threadOpen = overlay.panelOpen() or overlay.cardOpen()
   overlay.closePanel(0) -- at once: with Control already down, the screen is captured next
   os.remove(audioPath)
   cancelled, sendOnExit, micReadyAt, usedStandby, holding, handoverAt = false, false, nil, nil, true, nil
-  session = { replyTo = replyTo }
+  session = { replyTo = replyTo, threadOpen = threadOpen }
   local s = session
   startedAt = hs.timer.secondsSinceEpoch()
   if cfg.streaming and hs.fs.attributes(recorderHelper()) then return startStreaming() end
@@ -740,6 +778,7 @@ local function askScreen(s)
   if s.replyTo then
     -- A reply to a background task: what is said goes to her, the screen isn't needed.
     s.reply = s.replyTo
+    overlay.dismissCard(s.replyTo)
     sounds.play("ask")
     return
   end
@@ -754,7 +793,9 @@ local function askScreen(s)
   setIndicator(nil, nil, 0)
   sounds.play("ask")
   overlay.hideGlow(0) -- an older question's glow mustn't end up in this screenshot
+  overlay.hideForCapture(true)
   screen.capture(function(shot, err)
+    overlay.hideForCapture(false)
     if err then
       log("%s", err)
       s.error = "Couldn't capture the screen (" .. err .. ")."
@@ -878,6 +919,15 @@ function M.start(overrides)
   screenFill.setup(cfg)
   voice.setup(cfg)
   tasks.setup(cfg)
+  overlay.setup()
+  overlay.setTypeHandler(function(ctx, at)
+    overlay.typeBox(at, function(text) if text then askTyped(text, ctx) end end)
+  end)
+  -- What she says on her own (a finished task, a filed meeting) is part of the conversation too.
+  overlay.onSpoke(function(item)
+    local text = type(item.text) == "table" and ((item.text.gist or "") .. "\n" .. (item.text.body or "")) or item.text
+    core.threadAdd(thread, nil, text, os.time())
+  end)
   badge.setup()
   sounds.setup(cfg, function() return core.inCall(meeting.online(), detector.callers()) end)
   meeting.setup(cfg, dictPath, updateMenubar)
